@@ -188,10 +188,9 @@ class DilatedConvLayerSE(layers.Layer):
         x = self.dropout(x, training=training)
         return x
 
-class CheapCausalAttention(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads=4):
+class CheapCausalAttention(layers.Layer):
+    def __init__(self, d_model):
         super().__init__()
-        self.num_heads = num_heads
         self.d_model = d_model
         self.q_proj = layers.Dense(d_model, use_bias=True)
         self.k_proj = layers.Dense(d_model, use_bias=True)
@@ -199,23 +198,18 @@ class CheapCausalAttention(tf.keras.layers.Layer):
         self.out_proj = layers.Dense(d_model, use_bias=True)
 
     def call(self, x):
-        B, T, D = tf.unstack(tf.shape(x))
-        Q = self.q_proj(x)  # [B, T, D]
-        K = self.k_proj(x)  # [B, T, D]
-        V = self.v_proj(x)  # [B, T, D]
+        Q = tf.nn.silu(self.q_proj(x))  # (B, T, D)
+        K = tf.nn.silu(self.k_proj(x))
+        V = self.v_proj(x)
 
-        d_k = tf.cast(D, tf.float32)
-        scores = tf.einsum("bqd,bkd->bqk", Q, K) / tf.sqrt(d_k)  # [B, T, T]
+        # elementwise causal linear attention
+        KV = K * V                      # (B, T, D)
+        KV_cumsum = tf.cumsum(KV, axis=1)      # (B, T, D)
+        K_cumsum = tf.cumsum(K, axis=1)        # (B, T, D)
 
-        # === Causal mask 생성 (동적으로) ===
-        mask = tf.linalg.band_part(tf.ones((T, T)), -1, 0)  # [T, T]
-        mask = tf.cast(mask, tf.float32)[tf.newaxis, :, :]  # [1, T, T]
+        out = KV_cumsum / (K_cumsum + 1e-8)   # safe division
+        out = out * Q                          # scaling by Q
 
-        # === SiLU + L1 softmax 근사 ===
-        weights = tf.nn.silu(scores) * mask
-        weights /= tf.reduce_sum(weights, axis=-1, keepdims=True) + 1e-8
-
-        out = tf.einsum("bqk,bkd->bqd", weights, V)  # [B, T, D]
         return self.out_proj(out)
 
 
