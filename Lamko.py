@@ -56,7 +56,7 @@ unk_id = sp.piece_to_id("<unk>")
 vocab_size = sp.get_piece_size()
 print(f"✅ Vocabulary size: {vocab_size}")
 
-max_len = 100
+max_len = 125
 batch_size = 32  # GPU 메모리 절약용
 
 def text_to_ids(text):
