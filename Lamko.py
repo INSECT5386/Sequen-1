@@ -243,7 +243,7 @@ def masked_accuracy(y_true, y_pred):
 # 모델 생성 & 학습
 # =======================
 with strategy.scope():
-    model = Lamko(vocab_size, max_seq_len=max_len, d_model=384, n_layers=9, dropout_rate=0.1)
+    model = Lamko(vocab_size, max_seq_len=max_len, d_model=512, n_layers=9, dropout_rate=0.1)
     dummy_input = tf.zeros((batch_size, max_len), dtype=tf.int32)
     _ = model(dummy_input, training=False)
     model.summary()
