@@ -188,44 +188,6 @@ class DilatedConvLayerSE(layers.Layer):
         x = self.dropout(x, training=training)
         return x
 
-class CheapCausalAttention(layers.Layer):
-    def __init__(self, d_model):
-        super().__init__()
-        self.d_model = d_model
-        self.q_proj = layers.Dense(d_model, use_bias=True)
-        self.k_proj = layers.Dense(d_model, use_bias=True)
-        self.v_proj = layers.Dense(d_model, use_bias=True)
-        self.out_proj = layers.Dense(d_model, use_bias=True)
-
-    def call(self, x):
-        Q = tf.nn.silu(self.q_proj(x))  # (B, T, D)
-        K = tf.nn.silu(self.k_proj(x))
-        V = self.v_proj(x)
-
-        # elementwise causal linear attention
-        KV = K * V                      # (B, T, D)
-        KV_cumsum = tf.cumsum(KV, axis=1)      # (B, T, D)
-        K_cumsum = tf.cumsum(K, axis=1)        # (B, T, D)
-
-        out = KV_cumsum / (K_cumsum + 1e-8)   # safe division
-        out = out * Q                          # scaling by Q
-
-        return self.out_proj(out)
-
-
-class CheapAttentionBlock(layers.Layer):
-    def __init__(self, d_model, dropout_rate=0.1):
-        super().__init__()
-        self.attn = CheapCausalAttention(d_model)
-        self.ln = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
-        self.dropout = layers.Dropout(dropout_rate)
-
-    def call(self, x, training=False):
-        residual = x
-        x = self.attn(x)
-        x = self.ln(x + residual)
-        return self.dropout(x, training=training)
-
 class Lamko(Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
@@ -236,7 +198,6 @@ class Lamko(Model):
         for i in range(n_layers):
             self.blocks.append(DilatedConvLayerSE(d_model, 2 ** i, dropout_rate))
             if (i + 1) % 3 == 0:
-                self.blocks.append(CheapAttentionBlock(d_model, dropout_rate))  # ✅ CheapAttention 추가
                 self.blocks.append(SwiGLU(d_model))
                 self.blocks.append(layers.LayerNormalization(epsilon=1e-5, dtype='float32'))
 
