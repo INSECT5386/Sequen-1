@@ -57,7 +57,7 @@ vocab_size = sp.get_piece_size()
 print(f"✅ Vocabulary size: {vocab_size}")
 
 max_len = 100
-batch_size = 64  # GPU 메모리 절약용
+batch_size = 32  # GPU 메모리 절약용
 
 def text_to_ids(text):
     return sp.encode(text, out_type=int)
@@ -126,7 +126,7 @@ def jsonl_stream(file_path, limit=None, sample_rate=1.0):
                     return
 
 dataset = tf.data.Dataset.from_generator(
-    lambda: jsonl_stream(DATA_PATH, limit=1500000),
+    lambda: jsonl_stream(DATA_PATH, limit=750000),
     output_signature=(
         tf.TensorSpec(shape=(max_len,), dtype=tf.int32),
         tf.TensorSpec(shape=(max_len,), dtype=tf.int32),
