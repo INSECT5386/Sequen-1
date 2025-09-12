@@ -65,6 +65,9 @@ def text_to_ids(text):
 def ids_to_text(ids):
     return sp.decode(ids)
 
+# Lamko.weights (1).h5
+
+
 # =======================
 # 데이터셋
 # =======================
@@ -135,9 +138,6 @@ dataset = tf.data.Dataset.from_generator(
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
-# =======================
-# 모델 정의
-# =======================
 class SwiGLU(layers.Layer):
     def __init__(self, d_model, f_d=8/3):
         super().__init__()
@@ -149,22 +149,7 @@ class SwiGLU(layers.Layer):
         x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
         return self.out(x_val * tf.nn.silu(x_gate))
 
-class SEBlock(layers.Layer):
-    def __init__(self, channels, reduction=16):
-        super().__init__()
-        self.global_pool = layers.GlobalAveragePooling1D()
-        self.fc1 = layers.Dense(channels // reduction, activation='relu', use_bias=False, dtype='float32')
-        self.fc2 = layers.Dense(channels, activation='sigmoid', use_bias=False, dtype='float32')
-
-    def call(self, x):
-        # x: (batch, seq_len, channels)
-        se = self.global_pool(x)           # (batch, channels)
-        se = self.fc1(se)                  # (batch, channels // reduction)
-        se = self.fc2(se)                  # (batch, channels)
-        se = tf.expand_dims(se, axis=1)    # (batch, 1, channels)
-        return x * se                       # 채널별 스케일링
-
-class DilatedConvLayerSE(layers.Layer):
+class DilatedConvLayer(layers.Layer):
     def __init__(self, d_model, dilation_rate, dropout_rate=0.1):
         super().__init__()
         self.conv = layers.Conv1D(
@@ -177,18 +162,16 @@ class DilatedConvLayerSE(layers.Layer):
             dtype='float32'
         )
         self.ln = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
-        self.se = SEBlock(d_model)   # SE 블록 추가
         self.dropout = layers.Dropout(dropout_rate)
 
     def call(self, x, training=False):
         residual = x
         x = self.conv(x)
-        x = self.se(x)               # SE 적용
         x = self.ln(x + residual)
         x = self.dropout(x, training=training)
         return x
 
-class Lamko(Model):
+class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
@@ -196,7 +179,7 @@ class Lamko(Model):
 
         self.blocks = []
         for i in range(n_layers):
-            self.blocks.append(DilatedConvLayerSE(d_model, 2 ** i, dropout_rate))
+            self.blocks.append(DilatedConvLayer(d_model, 2 ** i, dropout_rate))
             if (i + 1) % 3 == 0:
                 self.blocks.append(SwiGLU(d_model))
                 self.blocks.append(layers.LayerNormalization(epsilon=1e-5, dtype='float32'))
@@ -219,7 +202,6 @@ class Lamko(Model):
         x = self.ln_f(x)
         logits = tf.matmul(x, self.token_embedding.weights[0], transpose_b=True)
         return logits
-
 # =======================
 # 손실/메트릭 정의
 # =======================
