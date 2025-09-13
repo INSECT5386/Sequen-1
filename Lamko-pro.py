@@ -55,9 +55,10 @@ end_id = sp.piece_to_id("<end>")
 unk_id = sp.piece_to_id("<unk>")
 vocab_size = sp.get_piece_size()
 print(f"✅ Vocabulary size: {vocab_size}")
-
+limit = 500000
 max_len = 96
-batch_size = 32  # GPU 메모리 절약용
+batch_size = 48  # GPU 메모리 절약용
+print(limit // batch_size)
 
 def text_to_ids(text):
     return sp.encode(text, out_type=int)
@@ -129,7 +130,7 @@ def jsonl_stream(file_path, limit=None, sample_rate=1.0):
                     return
 
 dataset = tf.data.Dataset.from_generator(
-    lambda: jsonl_stream(DATA_PATH, limit=750000),
+    lambda: jsonl_stream(DATA_PATH, limit=limit),
     output_signature=(
         tf.TensorSpec(shape=(max_len,), dtype=tf.int32),
         tf.TensorSpec(shape=(max_len,), dtype=tf.int32),
@@ -137,10 +138,6 @@ dataset = tf.data.Dataset.from_generator(
 )
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
-
-import tensorflow as tf
-import numpy as np
-
 
 # =============================
 # SwiGLU Layer
@@ -193,8 +190,8 @@ class SparseAttentionBlock(tf.keras.layers.Layer):
         self.dropout_rate = dropout_rate
         self.max_seq_len = max_seq_len
 
-        self.qkv_proj = tf.keras.layers.Dense(d_model * 3, use_bias=False, dtype='float32')
-        self.out_proj = tf.keras.layers.Dense(d_model, use_bias=False, dtype='float32')
+        self.qkv_proj = tf.keras.layers.Dense(d_model * 3, use_bias=True, dtype='float32')
+        self.out_proj = tf.keras.layers.Dense(d_model, use_bias=True, dtype='float32')
         self.dropout = tf.keras.layers.Dropout(dropout_rate)
         self.ln = tf.keras.layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
