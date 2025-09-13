@@ -155,8 +155,6 @@ class SwiGLU(tf.keras.layers.Layer):
     def call(self, x):
         x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
         return self.out(x_val * tf.nn.silu(x_gate))
-
-
 # =============================
 # Dilated Convolution Layer (Pre-LN)
 # =============================
@@ -183,10 +181,6 @@ class DilatedConvLayer(tf.keras.layers.Layer):
         x = self.dropout(x, training=training)
         return x
 
-
-# =============================
-# Sparse Attention Block (Local + Global + Random + Causal)
-# =============================
 class SparseAttentionBlock(tf.keras.layers.Layer):
     def __init__(self, d_model, num_heads=8, window_size=64, global_tokens=4, random_tokens=32, dropout_rate=0.1, max_seq_len=2048):
         super().__init__()
@@ -199,184 +193,82 @@ class SparseAttentionBlock(tf.keras.layers.Layer):
         self.dropout_rate = dropout_rate
         self.max_seq_len = max_seq_len
 
-        # QKV 및 출력 프로젝션
         self.qkv_proj = tf.keras.layers.Dense(d_model * 3, use_bias=False, dtype='float32')
         self.out_proj = tf.keras.layers.Dense(d_model, use_bias=False, dtype='float32')
         self.dropout = tf.keras.layers.Dropout(dropout_rate)
         self.ln = tf.keras.layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
-        # 고정된 random indices 미리 생성 (재현성 확보)
         self.fixed_random_indices = self._generate_fixed_random_indices()
 
     def _generate_fixed_random_indices(self):
-        """미리 고정된 random token 인덱스를 생성 (batch마다 동일하게)"""
-        # shape: (max_seq_len, random_tokens)
-        indices = tf.random.uniform(
-            (self.max_seq_len, self.random_tokens),
-            minval=0,
-            maxval=self.max_seq_len,
-            dtype=tf.int32,
-            seed=42  # 재현성 위해 고정
-        )
-        return indices  # (max_seq_len, R)
+        return tf.random.uniform((self.max_seq_len, self.random_tokens), minval=0, maxval=self.max_seq_len, dtype=tf.int32, seed=42)
 
     def call(self, x, training=False):
         batch_size, seq_len, _ = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
-
         residual = x
         x = self.ln(x)
 
-        # Q, K, V projection
-        qkv = self.qkv_proj(x)  # (B, L, 3*d_model)
-        q, k, v = tf.split(qkv, 3, axis=-1)  # 각각 (B, L, d_model)
+        qkv = self.qkv_proj(x)
+        q, k, v = tf.split(qkv, 3, axis=-1)
 
-        # Multi-head reshape: (B, L, H, D) -> (B, H, L, D)
         q = tf.reshape(q, (batch_size, seq_len, self.num_heads, self.head_dim))
         k = tf.reshape(k, (batch_size, seq_len, self.num_heads, self.head_dim))
         v = tf.reshape(v, (batch_size, seq_len, self.num_heads, self.head_dim))
 
-        q = tf.transpose(q, (0, 2, 1, 3))  # (B, H, L, D)
+        q = tf.transpose(q, (0, 2, 1, 3))
         k = tf.transpose(k, (0, 2, 1, 3))
         v = tf.transpose(v, (0, 2, 1, 3))
 
-        # === Create causal mask (L, L) ===
-        causal_mask = tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)  # lower triangular
+        causal_mask = tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
 
-        # === 1. Local Attention (with causal) ===
         local_mask = self._create_local_mask(seq_len, causal_mask)
-        local_scores = self._compute_attention_scores(q, k, local_mask)
-
-        # === 2. Global Attention (with causal) ===
-        global_indices = tf.concat([
-            tf.range(self.global_tokens),  # first N
-            tf.range(seq_len - self.global_tokens, seq_len)  # last N
-        ], axis=0)
+        global_indices = tf.concat([tf.range(self.global_tokens), tf.range(seq_len - self.global_tokens, seq_len)], axis=0)
         global_mask = self._create_global_mask(seq_len, global_indices, causal_mask)
-        global_scores = self._compute_attention_scores(q, k, global_mask)
-
-        # === 3. Random Attention (with causal) ===
         random_mask = self._create_random_mask(seq_len, causal_mask)
+
+        local_scores = self._compute_attention_scores(q, k, local_mask)
+        global_scores = self._compute_attention_scores(q, k, global_mask)
         random_scores = self._compute_attention_scores(q, k, random_mask)
 
-        # === Combine all attention scores ===
         combined_scores = local_scores + global_scores + random_scores
-
-        # Softmax + dropout
         attn_weights = tf.nn.softmax(combined_scores, axis=-1)
         attn_weights = self.dropout(attn_weights, training=training)
 
-        # Apply to values
-        output = tf.matmul(attn_weights, v)  # (B, H, L, D)
-        output = tf.transpose(output, (0, 2, 1, 3))  # (B, L, H, D)
+        output = tf.matmul(attn_weights, v)
+        output = tf.transpose(output, (0, 2, 1, 3))
         output = tf.reshape(output, (batch_size, seq_len, self.d_model))
-
-        # Output projection
         output = self.out_proj(output)
 
-        return output + residual  # Residual connection
+        return output + residual
 
     def _create_local_mask(self, seq_len, causal_mask):
         indices = tf.range(seq_len)
         distance = tf.abs(tf.expand_dims(indices, 0) - tf.expand_dims(indices, 1))
         mask = tf.cast(distance <= self.window_size, tf.float32)
-        return mask * causal_mask  # Apply causal constraint
+        return mask * causal_mask
 
     def _create_global_mask(self, seq_len, global_indices, causal_mask):
-    # Create a mask where each global token g can be attended by all i >= g
-    # We want: mask[i][g] = 1 if i >= g, else 0
-
-    # Shape: (G,) -> expand to (G, 1)
-        global_indices_expanded = tf.expand_dims(global_indices, 1)  # (G, 1)
-    
-    # Create range: (seq_len,)
-        indices_range = tf.range(seq_len, dtype=tf.int32)  # (seq_len,)
-
-    # Broadcast comparison: (G, seq_len)
-    # For each global token g, create boolean mask: i >= g
-        mask_bool = tf.greater_equal(
-        tf.expand_dims(indices_range, 0),   # (1, seq_len)
-        global_indices_expanded             # (G, 1)
-    )  # Result: (G, seq_len)
-
-    # Sum over G dimension: if any global token allows attention, set to 1
-    # This creates a mask: (seq_len,) where position i is 1 if ANY g <= i
-        mask_per_pos = tf.reduce_any(mask_bool, axis=0)  # (seq_len,)
-
-    # Expand to full matrix: (seq_len, seq_len)
-    # Each row i gets the same pattern: 1s from 0 to i
-        mask_full = tf.cast(tf.expand_dims(mask_per_pos, 1) & tf.expand_dims(mask_per_pos, 0), tf.float32)
-
-    # Create source indices: (seq_len,) — all possible j values
-        j_indices = tf.range(seq_len, dtype=tf.int32)  # (seq_len,)
-        is_global = tf.reduce_any(tf.equal(tf.expand_dims(j_indices, 1), global_indices), axis=1)  # (seq_len,)
-        i_indices = tf.range(seq_len, dtype=tf.int32)  # (seq_len,)
-        causal_lower = tf.greater_equal(tf.expand_dims(i_indices, 1), tf.expand_dims(j_indices, 0))  # (seq_len, seq_len)
-
-    # Combine: only allow attention to global tokens that are not ahead
-        mask = tf.cast(is_global[None, :] & causal_lower, tf.float32)  # (1, seq_len) * (seq_len, seq_len) → (seq_len, seq_len)
-        return mask * causal_mask  # Apply final causal constraint
+        j_indices = tf.range(seq_len, dtype=tf.int32)
+        is_global = tf.reduce_any(tf.equal(tf.expand_dims(j_indices, 1), global_indices), axis=1)
+        i_indices = tf.range(seq_len, dtype=tf.int32)
+        causal_lower = tf.greater_equal(tf.expand_dims(i_indices, 1), tf.expand_dims(j_indices, 0))
+        mask = tf.cast(tf.expand_dims(is_global, 0) & causal_lower, tf.float32)
+        return mask * causal_mask
 
     def _create_random_mask(self, seq_len, causal_mask):
-    # Get random indices for current sequence length
-        random_indices = self.fixed_random_indices[:seq_len]  # (seq_len, R)
-
-    # Create mask: for each target i, which j's are allowed? (j in random_indices[i] and j <= i)
-    # Step 1: Create a mask of shape (seq_len, R) indicating whether each random token j <= i
-        i_indices = tf.range(seq_len, dtype=tf.int32)  # (seq_len,)
-        j_indices = tf.expand_dims(random_indices, -1)  # (seq_len, R, 1)
-        i_expand = tf.expand_dims(i_indices, 1)         # (seq_len, 1, 1)
-        j_le_i = tf.less_equal(j_indices, i_expand)     # (seq_len, R, seq_len)
-
-    # Now we need to know: for each target i, and for each source j, is j in random_indices[i] AND j<=i?
-    # We'll reduce along R dimension: if ANY j in random_indices[i] satisfies j<=i, then mark it
-    # But actually: we want to set mask[i][j] = 1 if j == one of the random tokens at position i AND j<=i
-
-    # Instead, let's do this: create a sparse mask using scatter
-    # We'll generate all (i, j) pairs where j is in random_indices[i] and j <= i
-    # Use tf.where to find valid (i, j)
-
-    # Create meshgrid-like indices
-        i_grid = tf.tile(tf.expand_dims(tf.range(seq_len), 1), [1, self.random_tokens])  # (seq_len, R)
-        j_grid = random_indices  # (seq_len, R)
-
-    # Mask: keep only those where j <= i
-        valid_mask = tf.less_equal(j_grid, i_grid)  # (seq_len, R)
-
-    # Get valid (i, j) pairs
-        valid_i = tf.boolean_mask(i_grid, valid_mask)      # (K,)
-        valid_j = tf.boolean_mask(j_grid, valid_mask)      # (K,)
-
-    # Stack into update indices
-        update_indices = tf.stack([valid_i, valid_j], axis=1)  # (K, 2)
-
-    # Initialize mask
+        random_indices = self.fixed_random_indices[:seq_len]
+        i_indices = tf.range(seq_len, dtype=tf.int32)[:, None]
+        j_le_i = tf.less_equal(random_indices, i_indices)
+        valid_i, valid_j = tf.where(j_le_i)[:, 0], tf.where(j_le_i)[:, 1]
+        update_indices = tf.stack([valid_i, tf.gather_nd(random_indices, tf.stack([valid_i, valid_j], axis=1))], axis=1)
         mask = tf.zeros((seq_len, seq_len), dtype=tf.float32)
-
-    # Scatter ones
-        mask = tf.tensor_scatter_nd_update(
-        mask,
-        update_indices,
-        tf.ones_like(valid_i, dtype=tf.float32)
-    )
-
+        mask = tf.tensor_scatter_nd_update(mask, update_indices, tf.ones_like(valid_i, dtype=tf.float32))
         return mask * causal_mask
 
     def _compute_attention_scores(self, q, k, mask):
-        """
-        q: (B, H, L, D)
-        k: (B, H, L, D)
-        mask: (L, L)
-        """
-        # Scaled dot-product
-        scores = tf.matmul(q, k, transpose_b=True) / tf.math.sqrt(tf.cast(self.head_dim, tf.float32))  # (B, H, L, L)
-
-        # Expand mask to match scores: (1, 1, L, L)
-        mask = tf.expand_dims(tf.expand_dims(mask, 0), 0)  # (1, 1, L, L)
-
-        # Apply mask
-        scores = scores + (1.0 - mask) * -1e9
-        return scores
-
+        scores = tf.matmul(q, k, transpose_b=True) / tf.math.sqrt(tf.cast(self.head_dim, tf.float32))
+        mask = tf.expand_dims(tf.expand_dims(mask, 0), 0)
+        return scores + (1.0 - mask) * -1e9
 
 # =============================
 # Main Model: Lamko (Decoder-only Language Model)
