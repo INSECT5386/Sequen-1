@@ -282,31 +282,82 @@ class SparseAttentionBlock(tf.keras.layers.Layer):
         return mask * causal_mask  # Apply causal constraint
 
     def _create_global_mask(self, seq_len, global_indices, causal_mask):
-        mask = tf.zeros((seq_len, seq_len), dtype=tf.float32)
-        for g in global_indices:
-            # Only allow positions i >= g to attend to global token at g
-            valid_range = tf.range(g, seq_len)
-            update_indices = tf.stack([valid_range, tf.repeat(g, len(valid_range))], axis=1)
-            mask = tf.tensor_scatter_nd_update(mask, update_indices, tf.ones_like(valid_range, dtype=tf.float32))
-        return mask * causal_mask
+    # Create a mask where each global token g can be attended by all i >= g
+    # We want: mask[i][g] = 1 if i >= g, else 0
+
+    # Shape: (G,) -> expand to (G, 1)
+        global_indices_expanded = tf.expand_dims(global_indices, 1)  # (G, 1)
+    
+    # Create range: (seq_len,)
+        indices_range = tf.range(seq_len, dtype=tf.int32)  # (seq_len,)
+
+    # Broadcast comparison: (G, seq_len)
+    # For each global token g, create boolean mask: i >= g
+        mask_bool = tf.greater_equal(
+        tf.expand_dims(indices_range, 0),   # (1, seq_len)
+        global_indices_expanded             # (G, 1)
+    )  # Result: (G, seq_len)
+
+    # Sum over G dimension: if any global token allows attention, set to 1
+    # This creates a mask: (seq_len,) where position i is 1 if ANY g <= i
+        mask_per_pos = tf.reduce_any(mask_bool, axis=0)  # (seq_len,)
+
+    # Expand to full matrix: (seq_len, seq_len)
+    # Each row i gets the same pattern: 1s from 0 to i
+        mask_full = tf.cast(tf.expand_dims(mask_per_pos, 1) & tf.expand_dims(mask_per_pos, 0), tf.float32)
+
+    # Create source indices: (seq_len,) — all possible j values
+        j_indices = tf.range(seq_len, dtype=tf.int32)  # (seq_len,)
+        is_global = tf.reduce_any(tf.equal(tf.expand_dims(j_indices, 1), global_indices), axis=1)  # (seq_len,)
+        i_indices = tf.range(seq_len, dtype=tf.int32)  # (seq_len,)
+        causal_lower = tf.greater_equal(tf.expand_dims(i_indices, 1), tf.expand_dims(j_indices, 0))  # (seq_len, seq_len)
+
+    # Combine: only allow attention to global tokens that are not ahead
+        mask = tf.cast(is_global[None, :] & causal_lower, tf.float32)  # (1, seq_len) * (seq_len, seq_len) → (seq_len, seq_len)
+        return mask * causal_mask  # Apply final causal constraint
 
     def _create_random_mask(self, seq_len, causal_mask):
-        # Use precomputed fixed random indices
-        # Shape: (max_seq_len, random_tokens) -> slice to current seq_len
+    # Get random indices for current sequence length
         random_indices = self.fixed_random_indices[:seq_len]  # (seq_len, R)
 
-        # For each position i, we want to know which j's it can attend to (j <= i)
-        # We create a mask: for each i, set mask[i][j] = 1 if j is in random_indices[i] AND j <= i
+    # Create mask: for each target i, which j's are allowed? (j in random_indices[i] and j <= i)
+    # Step 1: Create a mask of shape (seq_len, R) indicating whether each random token j <= i
+        i_indices = tf.range(seq_len, dtype=tf.int32)  # (seq_len,)
+        j_indices = tf.expand_dims(random_indices, -1)  # (seq_len, R, 1)
+        i_expand = tf.expand_dims(i_indices, 1)         # (seq_len, 1, 1)
+        j_le_i = tf.less_equal(j_indices, i_expand)     # (seq_len, R, seq_len)
+
+    # Now we need to know: for each target i, and for each source j, is j in random_indices[i] AND j<=i?
+    # We'll reduce along R dimension: if ANY j in random_indices[i] satisfies j<=i, then mark it
+    # But actually: we want to set mask[i][j] = 1 if j == one of the random tokens at position i AND j<=i
+
+    # Instead, let's do this: create a sparse mask using scatter
+    # We'll generate all (i, j) pairs where j is in random_indices[i] and j <= i
+    # Use tf.where to find valid (i, j)
+
+    # Create meshgrid-like indices
+        i_grid = tf.tile(tf.expand_dims(tf.range(seq_len), 1), [1, self.random_tokens])  # (seq_len, R)
+        j_grid = random_indices  # (seq_len, R)
+
+    # Mask: keep only those where j <= i
+        valid_mask = tf.less_equal(j_grid, i_grid)  # (seq_len, R)
+
+    # Get valid (i, j) pairs
+        valid_i = tf.boolean_mask(i_grid, valid_mask)      # (K,)
+        valid_j = tf.boolean_mask(j_grid, valid_mask)      # (K,)
+
+    # Stack into update indices
+        update_indices = tf.stack([valid_i, valid_j], axis=1)  # (K, 2)
+
+    # Initialize mask
         mask = tf.zeros((seq_len, seq_len), dtype=tf.float32)
 
-        for i in range(seq_len):
-            # Get random tokens for this row
-            row_random = random_indices[i]  # shape: (R,)
-            # Filter only those j where j <= i
-            valid_j = tf.boolean_mask(row_random, row_random <= i)
-            if tf.size(valid_j) > 0:
-                update_indices = tf.stack([tf.repeat(i, tf.size(valid_j)), valid_j], axis=1)
-                mask = tf.tensor_scatter_nd_update(mask, update_indices, tf.ones_like(tf.cast(valid_j, tf.float32)))
+    # Scatter ones
+        mask = tf.tensor_scatter_nd_update(
+        mask,
+        update_indices,
+        tf.ones_like(valid_i, dtype=tf.float32)
+    )
 
         return mask * causal_mask
 
