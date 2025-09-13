@@ -138,16 +138,18 @@ dataset = tf.data.Dataset.from_generator(
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
+
 class SwiGLU(layers.Layer):
     def __init__(self, d_model, f_d=8/3):
         super().__init__()
-        hidden_dim = int(d_model * f_d)
+        hidden_dim = int(d_model * f_d + 0.5)  # 반올림
         self.proj = layers.Dense(hidden_dim * 2, use_bias=False, dtype='float32')
         self.out = layers.Dense(d_model, use_bias=False, dtype='float32')
 
     def call(self, x):
         x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
         return self.out(x_val * tf.nn.silu(x_gate))
+
 
 class DilatedConvLayer(layers.Layer):
     def __init__(self, d_model, dilation_rate, dropout_rate=0.1):
@@ -166,10 +168,12 @@ class DilatedConvLayer(layers.Layer):
 
     def call(self, x, training=False):
         residual = x
+        x = self.ln(x)             # ← Pre-LN: LN 먼저
         x = self.conv(x)
-        x = self.ln(x + residual)
+        x = x + residual           # ← Residual
         x = self.dropout(x, training=training)
         return x
+
 
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
@@ -188,21 +192,20 @@ class Lamko(tf.keras.Model):
 
     def call(self, x, training=False):
         batch_size, seq_len = tf.shape(x)[0], tf.shape(x)[1]
-        positions = tf.range(seq_len)[tf.newaxis, :]
-        positions = tf.clip_by_value(positions, 0, self.pos_embedding.input_dim - 1)
+        positions = tf.range(seq_len)[tf.newaxis, :]  # ← clipping 제거
 
         x = self.token_embedding(x) + self.pos_embedding(positions)
 
         for block in self.blocks:
             if isinstance(block, SwiGLU):
-                x = x + block(x)
+                x = block(x)  # ← residual 없음, pure transform
             else:
                 x = block(x, training=training) if hasattr(block, 'training') else block(x)
 
         x = self.ln_f(x)
         logits = tf.matmul(x, self.token_embedding.weights[0], transpose_b=True)
         return logits
-# =======================
+
 # 손실/메트릭 정의
 # =======================
 def smoothed_loss_keras(y_true, y_pred, eps=0.1):
