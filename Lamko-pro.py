@@ -259,8 +259,11 @@ class SparseAttentionBlock(tf.keras.layers.Layer):
         random_indices = self.fixed_random_indices[:seq_len]
         i_indices = tf.range(seq_len, dtype=tf.int32)[:, None]
         j_le_i = tf.less_equal(random_indices, i_indices)
-        valid_i, valid_j = tf.where(j_le_i)[:, 0], tf.where(j_le_i)[:, 1]
-        update_indices = tf.stack([valid_i, tf.gather_nd(random_indices, tf.stack([valid_i, valid_j], axis=1))], axis=1)
+        where_coords = tf.cast(tf.where(j_le_i), tf.int32)
+        valid_i = where_coords[:, 0]
+        valid_j = where_coords[:, 1]
+        gathered_j = tf.gather_nd(random_indices, tf.stack([valid_i, valid_j], axis=1))
+        update_indices = tf.stack([valid_i, gathered_j], axis=1)
         mask = tf.zeros((seq_len, seq_len), dtype=tf.float32)
         mask = tf.tensor_scatter_nd_update(mask, update_indices, tf.ones_like(valid_i, dtype=tf.float32))
         return mask * causal_mask
