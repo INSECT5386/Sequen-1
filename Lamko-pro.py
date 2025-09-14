@@ -139,195 +139,192 @@ dataset = tf.data.Dataset.from_generator(
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
-# =============================
-# SwiGLU Layer
-# =============================
-class SwiGLU(tf.keras.layers.Layer):
-    def __init__(self, d_model, f_d=8/3):
-        super().__init__()
-        hidden_dim = int(d_model * f_d + 0.5)  # 반올림
-        self.proj = tf.keras.layers.Dense(hidden_dim * 2, use_bias=False, dtype='float32')
-        self.out = tf.keras.layers.Dense(d_model, use_bias=False, dtype='float32')
-
-    def call(self, x):
-        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
-        return self.out(x_val * tf.nn.silu(x_gate))
-# =============================
-# Dilated Convolution Layer (Pre-LN)
-# =============================
-class DilatedConvLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model, dilation_rate, dropout_rate=0.1):
-        super().__init__()
-        self.conv = tf.keras.layers.Conv1D(
-            filters=d_model,
-            kernel_size=3,
-            dilation_rate=dilation_rate,
-            padding='causal',
-            use_bias=True,
-            kernel_initializer='he_normal',
-            dtype='float32'
-        )
-        self.ln = tf.keras.layers.LayerNormalization(epsilon=1e-5, dtype='float32')
-        self.dropout = tf.keras.layers.Dropout(dropout_rate)
-
-    def call(self, x, training=False):
-        residual = x
-        x = self.ln(x)             # Pre-LN: LayerNorm 먼저
-        x = self.conv(x)
-        x = x + residual           # Residual
-        x = self.dropout(x, training=training)
-        return x
-
-class SparseAttentionBlock(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads=8, window_size=64, global_tokens=4, random_tokens=32, dropout_rate=0.1, max_seq_len=2048):
+# 1. Gated Linear Unit with Cross-Position Mixing
+class GLUMixer(layers.Layer):
+    def __init__(self, d_model, expansion_factor=2):
         super().__init__()
         self.d_model = d_model
-        self.num_heads = num_heads
-        self.head_dim = d_model // num_heads
-        self.window_size = window_size
-        self.global_tokens = global_tokens
-        self.random_tokens = random_tokens
-        self.dropout_rate = dropout_rate
-        self.max_seq_len = max_seq_len
+        self.hidden_dim = d_model * expansion_factor
+        
+        # Position mixing weights (learnable)
+        self.pos_mix = layers.Dense(d_model, use_bias=False, dtype='float32')
+        
+        # GLU components
+        self.gate_proj = layers.Dense(self.hidden_dim, use_bias=False, dtype='float32')
+        self.value_proj = layers.Dense(self.hidden_dim, use_bias=False, dtype='float32')
+        self.out_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
+        
+    def call(self, x):
+        batch_size, seq_len, d_model = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
+        
+        # Position-wise mixing: 각 토큰이 이웃 토큰들과 상호작용
+        # Circular shift를 통한 토큰 간 정보 교환
+        x_shifted_left = tf.concat([x[:, 1:, :], x[:, :1, :]], axis=1)
+        x_shifted_right = tf.concat([x[:, -1:, :], x[:, :-1, :]], axis=1)
+        
+        # 위치별 가중 합성
+        x_mixed = self.pos_mix(x + 0.1 * x_shifted_left + 0.1 * x_shifted_right)
+        
+        # GLU 변환
+        gate = tf.nn.sigmoid(self.gate_proj(x_mixed))
+        value = self.value_proj(x_mixed)
+        
+        return self.out_proj(gate * value)
 
-        self.qkv_proj = tf.keras.layers.Dense(d_model * 3, use_bias=True, dtype='float32')
-        self.out_proj = tf.keras.layers.Dense(d_model, use_bias=True, dtype='float32')
-        self.dropout = tf.keras.layers.Dropout(dropout_rate)
-        self.ln = tf.keras.layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
-        self.fixed_random_indices = self._generate_fixed_random_indices()
+# 2. Fourier Transform Based Mixing (Global Receptive Field)
+class FourierMixer(layers.Layer):
+    def __init__(self, d_model):
+        super().__init__()
+        self.d_model = d_model
+        self.scale = tf.Variable(1.0, trainable=True, dtype='float32')
+        self.proj_in = layers.Dense(d_model, use_bias=False, dtype='float32')
+        self.proj_out = layers.Dense(d_model, use_bias=False, dtype='float32')
+        
+    def call(self, x):
+        # 입력 변환
+        x = self.proj_in(x)
+        
+        # FFT를 통한 주파수 도메인 처리 (global mixing)
+        x_freq = tf.signal.fft(tf.cast(x, tf.complex64))
+        
+        # 학습 가능한 스케일링
+        x_freq = x_freq * tf.cast(self.scale, tf.complex64)
+        
+        # 역변환
+        x = tf.math.real(tf.signal.ifft(x_freq))
+        
+        return self.proj_out(x)
 
-    def _generate_fixed_random_indices(self):
-        return tf.random.uniform((self.max_seq_len, self.random_tokens), minval=0, maxval=self.max_seq_len, dtype=tf.int32, seed=42)
 
+# 3. Rotation-Based Position Interaction
+class RotaryMixer(layers.Layer):
+    def __init__(self, d_model, max_seq_len=2048):
+        super().__init__()
+        self.d_model = d_model
+        
+        # RoPE-style rotation matrices
+        dim = d_model // 2
+        inv_freq = 1.0 / (10000 ** (tf.cast(tf.range(0, dim, 2), tf.float32) / dim))
+        self.register_buffer('inv_freq', inv_freq)
+        
+        self.q_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
+        self.k_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
+        self.v_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
+        self.out_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
+        
+    def rotate_half(self, x):
+        x1, x2 = tf.split(x, 2, axis=-1)
+        return tf.concat([-x2, x1], axis=-1)
+    
+    def apply_rotary_pos_emb(self, x, pos):
+        # Rotary positional embedding
+        cos_pos = tf.cos(pos)
+        sin_pos = tf.sin(pos)
+        return x * cos_pos + self.rotate_half(x) * sin_pos
+        
+    def call(self, x):
+        seq_len = tf.shape(x)[1]
+        
+        # Position encoding
+        positions = tf.cast(tf.range(seq_len), tf.float32)[:, None]
+        freqs = positions * self.inv_freq[None, :]
+        pos_emb = tf.concat([freqs, freqs], axis=-1)
+        
+        # Q, K, V projections
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+        
+        # Apply rotary embeddings
+        q = self.apply_rotary_pos_emb(q, pos_emb)
+        k = self.apply_rotary_pos_emb(k, pos_emb)
+        
+        # Simplified interaction (no full attention)
+        # Local-global mixing through element-wise operations
+        interaction = q * tf.reduce_mean(k, axis=1, keepdims=True) + k * tf.reduce_mean(q, axis=1, keepdims=True)
+        output = interaction * v
+        
+        return self.out_proj(output)
+
+
+# 4. Depthwise Separable Convolution with Large Kernels
+class LargeKernelConv(layers.Layer):
+    def __init__(self, d_model, kernel_size=15, dropout_rate=0.1):
+        super().__init__()
+        
+        # Depthwise convolution
+        self.depthwise_conv = layers.DepthwiseConv1D(
+            kernel_size=kernel_size,
+            padding='causal',
+            use_bias=False,
+            dtype='float32'
+        )
+        
+        # Pointwise convolution
+        self.pointwise_conv = layers.Conv1D(
+            filters=d_model,
+            kernel_size=1,
+            use_bias=False,
+            dtype='float32'
+        )
+        
+        self.ln = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
+        self.dropout = layers.Dropout(dropout_rate)
+        
     def call(self, x, training=False):
-        batch_size, seq_len, _ = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
         residual = x
         x = self.ln(x)
+        x = self.depthwise_conv(x)
+        x = tf.nn.gelu(x)
+        x = self.pointwise_conv(x)
+        x = x + residual
+        return self.dropout(x, training=training)
 
-        qkv = self.qkv_proj(x)
-        q, k, v = tf.split(qkv, 3, axis=-1)
 
-        q = tf.reshape(q, (batch_size, seq_len, self.num_heads, self.head_dim))
-        k = tf.reshape(k, (batch_size, seq_len, self.num_heads, self.head_dim))
-        v = tf.reshape(v, (batch_size, seq_len, self.num_heads, self.head_dim))
-
-        q = tf.transpose(q, (0, 2, 1, 3))
-        k = tf.transpose(k, (0, 2, 1, 3))
-        v = tf.transpose(v, (0, 2, 1, 3))
-
-        causal_mask = tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
-
-        local_mask = self._create_local_mask(seq_len, causal_mask)
-        global_indices = tf.concat([tf.range(self.global_tokens), tf.range(seq_len - self.global_tokens, seq_len)], axis=0)
-        global_mask = self._create_global_mask(seq_len, global_indices, causal_mask)
-        random_mask = self._create_random_mask(seq_len, causal_mask)
-
-        local_scores = self._compute_attention_scores(q, k, local_mask)
-        global_scores = self._compute_attention_scores(q, k, global_mask)
-        random_scores = self._compute_attention_scores(q, k, random_mask)
-
-        combined_scores = local_scores + global_scores + random_scores
-        attn_weights = tf.nn.softmax(combined_scores, axis=-1)
-        attn_weights = self.dropout(attn_weights, training=training)
-
-        output = tf.matmul(attn_weights, v)
-        output = tf.transpose(output, (0, 2, 1, 3))
-        output = tf.reshape(output, (batch_size, seq_len, self.d_model))
-        output = self.out_proj(output)
-
-        return output + residual
-
-    def _create_local_mask(self, seq_len, causal_mask):
-        indices = tf.range(seq_len)
-        distance = tf.abs(tf.expand_dims(indices, 0) - tf.expand_dims(indices, 1))
-        mask = tf.cast(distance <= self.window_size, tf.float32)
-        return mask * causal_mask
-
-    def _create_global_mask(self, seq_len, global_indices, causal_mask):
-        j_indices = tf.range(seq_len, dtype=tf.int32)
-        is_global = tf.reduce_any(tf.equal(tf.expand_dims(j_indices, 1), global_indices), axis=1)
-        i_indices = tf.range(seq_len, dtype=tf.int32)
-        causal_lower = tf.greater_equal(tf.expand_dims(i_indices, 1), tf.expand_dims(j_indices, 0))
-        mask = tf.cast(tf.expand_dims(is_global, 0) & causal_lower, tf.float32)
-        return mask * causal_mask
-
-    def _create_random_mask(self, seq_len, causal_mask):
-        random_indices = self.fixed_random_indices[:seq_len]
-        i_indices = tf.range(seq_len, dtype=tf.int32)[:, None]
-        j_le_i = tf.less_equal(random_indices, i_indices)
-        where_coords = tf.cast(tf.where(j_le_i), tf.int32)
-        valid_i = where_coords[:, 0]
-        valid_j = where_coords[:, 1]
-        gathered_j = tf.gather_nd(random_indices, tf.stack([valid_i, valid_j], axis=1))
-        update_indices = tf.stack([valid_i, gathered_j], axis=1)
-        mask = tf.zeros((seq_len, seq_len), dtype=tf.float32)
-        mask = tf.tensor_scatter_nd_update(mask, update_indices, tf.ones_like(valid_i, dtype=tf.float32))
-        return mask * causal_mask
-
-    def _compute_attention_scores(self, q, k, mask):
-        scores = tf.matmul(q, k, transpose_b=True) / tf.math.sqrt(tf.cast(self.head_dim, tf.float32))
-        mask = tf.expand_dims(tf.expand_dims(mask, 0), 0)
-        return scores + (1.0 - mask) * -1e9
-
-# =============================
-# Main Model: Lamko (Decoder-only Language Model)
-# =============================
+# 5. Enhanced Lamko with Token Interaction Layers
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
-        self.vocab_size = vocab_size
-        self.max_seq_len = max_seq_len
-        self.d_model = d_model
-
-        # Embeddings
-        self.token_embedding = tf.keras.layers.Embedding(vocab_size, d_model, dtype='float32')
-        self.pos_embedding = tf.keras.layers.Embedding(max_seq_len, d_model, dtype='float32')
-
-        # Blocks
+        self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
+        self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
+        
         self.blocks = []
         for i in range(n_layers):
-            self.blocks.append(DilatedConvLayer(d_model, 2 ** i, dropout_rate))
+            # Dilated conv for local patterns
+            self.blocks.append(DilatedConvLayer(d_model, 2 ** (i % 6), dropout_rate))
+            
+            # Add token interaction layers periodically
+            if (i + 1) % 2 == 0:
+                # 다양한 상호작용 방식을 번갈아 사용
+                if i % 4 == 1:
+                    self.blocks.append(GLUMixer(d_model))
+                elif i % 4 == 3:
+                    self.blocks.append(FourierMixer(d_model))
+                    
+            # SwiGLU every 3 layers
             if (i + 1) % 3 == 0:
-                # Insert Sparse Attention after every 3rd conv block
-                self.blocks.append(SparseAttentionBlock(
-                    d_model=d_model,
-                    num_heads=8,
-                    window_size=64,
-                    global_tokens=4,
-                    random_tokens=32,
-                    dropout_rate=dropout_rate,
-                    max_seq_len=max_seq_len
-                ))
                 self.blocks.append(SwiGLU(d_model))
-                self.blocks.append(tf.keras.layers.LayerNormalization(epsilon=1e-5, dtype='float32'))
-
-        # Final LayerNorm and output projection (weight tied to token embedding)
-        self.ln_f = tf.keras.layers.LayerNormalization(epsilon=1e-5, dtype='float32')
-
+                self.blocks.append(layers.LayerNormalization(epsilon=1e-5, dtype='float32'))
+                
+        # Add final interaction layer
+        self.blocks.append(RotaryMixer(d_model, max_seq_len))
+        self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
+        
     def call(self, x, training=False):
         batch_size, seq_len = tf.shape(x)[0], tf.shape(x)[1]
-        positions = tf.range(seq_len)[tf.newaxis, :]  # (1, seq_len)
-
-        # Embeddings
-        x = self.token_embedding(x) + self.pos_embedding(positions)  # (B, L, D)
-
-        # Pass through blocks
+        positions = tf.range(seq_len)[tf.newaxis, :]
+        
+        x = self.token_embedding(x) + self.pos_embedding(positions)
+        
         for block in self.blocks:
-            if isinstance(block, SparseAttentionBlock):
-                x = block(x, training=training)
-            elif isinstance(block, DilatedConvLayer):
-                x = block(x, training=training)
+            if isinstance(block, (SwiGLU, GLUMixer, FourierMixer, RotaryMixer)):
+                x = x + block(x)  # Residual connection for mixing layers
             else:
-                # SwiGLU or LayerNorm: no training arg needed
-                x = block(x)
-
-        # Final normalization
+                x = block(x, training=training) if hasattr(block, 'training') else block(x)
+                
         x = self.ln_f(x)
-
-        # Output logits: weight-tying with token embedding
         logits = tf.matmul(x, self.token_embedding.weights[0], transpose_b=True)
-
         return logits
 
 def smoothed_loss_keras(y_true, y_pred, eps=0.1):
