@@ -171,6 +171,16 @@ class GLUMixer(layers.Layer):
         
         return self.out_proj(gate * value)
 
+class SwiGLU(layers.Layer):
+    def __init__(self, d_model, f_d=8/3):
+        super().__init__()
+        hidden_dim = int(d_model * f_d + 0.5)  # 반올림
+        self.proj = layers.Dense(hidden_dim * 2, use_bias=False, dtype='float32')
+        self.out = layers.Dense(d_model, use_bias=False, dtype='float32')
+
+    def call(self, x):
+        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
+        return self.out(x_val * tf.nn.silu(x_gate))
 
 # 2. Fourier Transform Based Mixing (Global Receptive Field)
 class FourierMixer(layers.Layer):
