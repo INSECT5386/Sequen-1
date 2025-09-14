@@ -55,7 +55,7 @@ end_id = sp.piece_to_id("<end>")
 unk_id = sp.piece_to_id("<unk>")
 vocab_size = sp.get_piece_size()
 print(f"✅ Vocabulary size: {vocab_size}")
-limit = 500000
+limit = 50000
 max_len = 96
 batch_size = 48  # GPU 메모리 절약용
 print(limit // batch_size)
