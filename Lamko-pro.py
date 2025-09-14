@@ -281,7 +281,28 @@ class LargeKernelConv(layers.Layer):
         x = x + residual
         return self.dropout(x, training=training)
 
+class DilatedConvLayer(layers.Layer):
+    def __init__(self, d_model, dilation_rate, dropout_rate=0.1):
+        super().__init__()
+        self.conv = layers.Conv1D(
+            filters=d_model,
+            kernel_size=3,
+            dilation_rate=dilation_rate,
+            padding='causal',
+            use_bias=True,
+            kernel_initializer='he_normal',
+            dtype='float32'
+        )
+        self.ln = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
+        self.dropout = layers.Dropout(dropout_rate)
 
+    def call(self, x, training=False):
+        residual = x
+        x = self.ln(x)             # ← Pre-LN: LN 먼저
+        x = self.conv(x)
+        x = x + residual           # ← Residual
+        x = self.dropout(x, training=training)
+        return x
 # 5. Enhanced Lamko with Token Interaction Layers
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
