@@ -139,51 +139,49 @@ dataset = tf.data.Dataset.from_generator(
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
-
 import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
 
 class ParaLSTMCell(tf.keras.layers.Layer):
     def __init__(self, units, **kwargs):
         super(ParaLSTMCell, self).__init__(**kwargs)
         self.units = units
-        self.input_dim = None  # 나중에 build에서 설정
+        self.input_dim = None
 
     def build(self, input_shape):
-        # input_shape: (batch, features) — RNN Cell은 한 timestep만 받음!
         self.input_dim = input_shape[-1]
 
-        # ✅ 입력 차원에 맞춰 가중치 생성
-        # W: input → gate (input_dim x units)
-        # U: hidden → gate (units x units)
-
+        # 입력 → 게이트
         self.W_i = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_i')
         self.W_f = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_f')
         self.W_o = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_o')
         self.W_c = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_c')
 
+        # hidden → 게이트
         self.U_i = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_i')
         self.U_f = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_f')
         self.U_o = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_o')
         self.U_c = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_c')
 
+        # Bias
         self.b_i = self.add_weight(shape=(self.units,), initializer='zeros', name='b_i')
         self.b_f = self.add_weight(shape=(self.units,), initializer='zeros', name='b_f')
         self.b_o = self.add_weight(shape=(self.units,), initializer='zeros', name='b_o')
         self.b_c = self.add_weight(shape=(self.units,), initializer='zeros', name='b_c')
 
         # Layer Normalization
-        self.ln_i = tf.keras.layers.LayerNormalization()
-        self.ln_f = tf.keras.layers.LayerNormalization()
-        self.ln_o = tf.keras.layers.LayerNormalization()
-        self.ln_c = tf.keras.layers.LayerNormalization()
-        self.ln_cell = tf.keras.layers.LayerNormalization()
+        self.ln_i = layers.LayerNormalization()
+        self.ln_f = layers.LayerNormalization()
+        self.ln_o = layers.LayerNormalization()
+        self.ln_c = layers.LayerNormalization()
+        self.ln_cell = layers.LayerNormalization()
 
         self.built = True
 
     def call(self, inputs, states):
         h_prev, c_prev = states
 
-        # ✅ 이제 inputs: (batch, input_dim), W: (input_dim, units) → 차원 일치!
         i_t = tf.sigmoid(self.ln_i(tf.matmul(inputs, self.W_i) + tf.matmul(h_prev, self.U_i) + self.b_i))
         f_t = tf.sigmoid(self.ln_f(tf.matmul(inputs, self.W_f) + tf.matmul(h_prev, self.U_f) + self.b_f))
         o_t = tf.sigmoid(self.ln_o(tf.matmul(inputs, self.W_o) + tf.matmul(h_prev, self.U_o) + self.b_o))
@@ -208,9 +206,10 @@ class ParaLSTMCell(tf.keras.layers.Layer):
     @property
     def output_size(self):
         return self.units
- 
+
+
 class Block(layers.Layer):
-    def __init__(self, d_model):
+    def __init__(self, d_model, dropout_rate=0.1):
         super().__init__()
         self.rnn = tf.keras.layers.RNN(
             ParaLSTMCell(units=d_model),
@@ -218,28 +217,37 @@ class Block(layers.Layer):
             return_state=False,
             name='ParaLSTM'
         )
-    def call(self, x):
+        self.dropout = layers.Dropout(dropout_rate)
+
+    def call(self, x, training=False):
         x = self.rnn(x)
+        x = self.dropout(x, training=training)
         return x
-        
+
+
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        self.blocks = [Block(d_model=d_model) for _ in range(n_layers)]
+        self.blocks = [Block(d_model=d_model, dropout_rate=dropout_rate) for _ in range(n_layers)]
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
-        
+
     def call(self, x, training=False):
         batch_size, seq_len = tf.shape(x)[0], tf.shape(x)[1]
-        positions = tf.range(seq_len)[tf.newaxis, :]
-        
-        x = self.token_embedding(x) + self.pos_embedding(positions)
-        
+        positions = tf.range(seq_len)[tf.newaxis, :]  # (1, seq_len)
+
+        x = self.token_embedding(x) + self.pos_embedding(positions)  # (batch, seq_len, d_model)
+
         for block in self.blocks:
             x = block(x, training=training)
-        x = self.ln_f(x)
-        logits = tf.matmul(x, self.token_embedding.weights[0], transpose_b=True)
+
+        x = self.ln_f(x)  # (batch, seq_len, d_model)
+
+        # ✅ 수정: 안전하게 embedding matrix 참조
+        embedding_matrix = self.token_embedding.embeddings
+        logits = tf.matmul(x, embedding_matrix, transpose_b=True)  # (batch, seq_len, vocab_size)
+
         return logits
 
 def smoothed_loss_keras(y_true, y_pred, eps=0.1):
