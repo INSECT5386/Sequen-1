@@ -208,42 +208,26 @@ class ParaLSTMCell(tf.keras.layers.Layer):
     @property
     def output_size(self):
         return self.units
-
-
-# 셀을 RNN 레이어로 감싸기
-para_lstm_layer = tf.keras.layers.RNN(
-    ParaLSTMCell(units=64),
-    return_sequences=True,
-    return_state=False,
-    name='ParaLSTM'
-)
+ 
+class Block(layers.Layer):
+    def __init__(self, d_model):
+        super().__init__()
+        self.rnn = tf.keras.layers.RNN(
+            ParaLSTMCell(units=d_model),
+            return_sequences=True,
+            return_state=False,
+            name='ParaLSTM'
+        )
+    def call(self, x):
+        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
+        return self.out(x_val * tf.nn.silu(x_gate))
 
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        
-        self.blocks = []
-        for i in range(n_layers):
-            # Dilated conv for local patterns
-            self.blocks.append(DilatedConvLayer(d_model, 2 ** (i % 6), dropout_rate))
-            
-            # Add token interaction layers periodically
-            if (i + 1) % 2 == 0:
-                # 다양한 상호작용 방식을 번갈아 사용
-                if i % 4 == 1:
-                    self.blocks.append(GLUMixer(d_model))
-                elif i % 4 == 3:
-                    self.blocks.append(FourierMixer(d_model))
-                    
-            # SwiGLU every 3 layers
-            if (i + 1) % 3 == 0:
-                self.blocks.append(SwiGLU(d_model))
-                self.blocks.append(layers.LayerNormalization(epsilon=1e-5, dtype='float32'))
-                
-        # Add final interaction layer
-        self.blocks.append(RotaryMixer(d_model, max_seq_len))
+        self.block = 
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
         
     def call(self, x, training=False):
