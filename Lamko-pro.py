@@ -219,15 +219,15 @@ class Block(layers.Layer):
             name='ParaLSTM'
         )
     def call(self, x):
-        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
-        return self.out(x_val * tf.nn.silu(x_gate))
-
+        x = self.rnn(x)
+        return x
+        
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        self.block = 
+        self.blocks = [Block(d_model=d_model) for _ in range(n_layers)]
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
         
     def call(self, x, training=False):
@@ -237,11 +237,7 @@ class Lamko(tf.keras.Model):
         x = self.token_embedding(x) + self.pos_embedding(positions)
         
         for block in self.blocks:
-            if isinstance(block, (SwiGLU, GLUMixer, FourierMixer, RotaryMixer)):
-                x = x + block(x)  # Residual connection for mixing layers
-            else:
-                x = block(x, training=training) if hasattr(block, 'training') else block(x)
-                
+            x = block(x, training=training)
         x = self.ln_f(x)
         logits = tf.matmul(x, self.token_embedding.weights[0], transpose_b=True)
         return logits
