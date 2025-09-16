@@ -139,181 +139,85 @@ dataset = tf.data.Dataset.from_generator(
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
-# 1. Gated Linear Unit with Cross-Position Mixing
-class GLUMixer(layers.Layer):
-    def __init__(self, d_model, expansion_factor=2):
-        super().__init__()
-        self.d_model = d_model
-        self.hidden_dim = d_model * expansion_factor
-        
-        # Position mixing weights (learnable)
-        self.pos_mix = layers.Dense(d_model, use_bias=False, dtype='float32')
-        
-        # GLU components
-        self.gate_proj = layers.Dense(self.hidden_dim, use_bias=False, dtype='float32')
-        self.value_proj = layers.Dense(self.hidden_dim, use_bias=False, dtype='float32')
-        self.out_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
-        
-    def call(self, x):
-        batch_size, seq_len, d_model = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
-        
-        # Position-wise mixing: 각 토큰이 이웃 토큰들과 상호작용
-        # Circular shift를 통한 토큰 간 정보 교환
-        x_shifted_left = tf.concat([x[:, 1:, :], x[:, :1, :]], axis=1)
-        x_shifted_right = tf.concat([x[:, -1:, :], x[:, :-1, :]], axis=1)
-        
-        # 위치별 가중 합성
-        x_mixed = self.pos_mix(x + 0.1 * x_shifted_left + 0.1 * x_shifted_right)
-        
-        # GLU 변환
-        gate = tf.nn.sigmoid(self.gate_proj(x_mixed))
-        value = self.value_proj(x_mixed)
-        
-        return self.out_proj(gate * value)
 
-class SwiGLU(layers.Layer):
-    def __init__(self, d_model, f_d=8/3):
-        super().__init__()
-        hidden_dim = int(d_model * f_d + 0.5)  # 반올림
-        self.proj = layers.Dense(hidden_dim * 2, use_bias=False, dtype='float32')
-        self.out = layers.Dense(d_model, use_bias=False, dtype='float32')
+import tensorflow as tf
 
-    def call(self, x):
-        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
-        return self.out(x_val * tf.nn.silu(x_gate))
+class ParaLSTMCell(tf.keras.layers.Layer):
+    def __init__(self, units, **kwargs):
+        super(ParaLSTMCell, self).__init__(**kwargs)
+        self.units = units
+        self.input_dim = None  # 나중에 build에서 설정
 
-# 2. Fourier Transform Based Mixing (Global Receptive Field)
-class FourierMixer(layers.Layer):
-    def __init__(self, d_model):
-        super().__init__()
-        self.d_model = d_model
-        self.scale = tf.Variable(1.0, trainable=True, dtype='float32')
-        self.proj_in = layers.Dense(d_model, use_bias=False, dtype='float32')
-        self.proj_out = layers.Dense(d_model, use_bias=False, dtype='float32')
-        
-    def call(self, x):
-        # 입력 변환
-        x = self.proj_in(x)
-        
-        # FFT를 통한 주파수 도메인 처리 (global mixing)
-        x_freq = tf.signal.fft(tf.cast(x, tf.complex64))
-        
-        # 학습 가능한 스케일링
-        x_freq = x_freq * tf.cast(self.scale, tf.complex64)
-        
-        # 역변환
-        x = tf.math.real(tf.signal.ifft(x_freq))
-        
-        return self.proj_out(x)
+    def build(self, input_shape):
+        # input_shape: (batch, features) — RNN Cell은 한 timestep만 받음!
+        self.input_dim = input_shape[-1]
 
+        # ✅ 입력 차원에 맞춰 가중치 생성
+        # W: input → gate (input_dim x units)
+        # U: hidden → gate (units x units)
 
-# 3. Rotation-Based Position Interaction
-class RotaryMixer(layers.Layer):
-    def __init__(self, d_model, max_seq_len=2048):
-        super().__init__()
-        self.d_model = d_model
-        
-        # RoPE-style rotation matrices
-        dim = d_model // 2
-        inv_freq = 1.0 / (10000 ** (tf.cast(tf.range(0, dim, 2), tf.float32) / dim))
-        self.register_buffer('inv_freq', inv_freq)
-        
-        self.q_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
-        self.k_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
-        self.v_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
-        self.out_proj = layers.Dense(d_model, use_bias=False, dtype='float32')
-        
-    def rotate_half(self, x):
-        x1, x2 = tf.split(x, 2, axis=-1)
-        return tf.concat([-x2, x1], axis=-1)
-    
-    def apply_rotary_pos_emb(self, x, pos):
-        # Rotary positional embedding
-        cos_pos = tf.cos(pos)
-        sin_pos = tf.sin(pos)
-        return x * cos_pos + self.rotate_half(x) * sin_pos
-        
-    def call(self, x):
-        seq_len = tf.shape(x)[1]
-        
-        # Position encoding
-        positions = tf.cast(tf.range(seq_len), tf.float32)[:, None]
-        freqs = positions * self.inv_freq[None, :]
-        pos_emb = tf.concat([freqs, freqs], axis=-1)
-        
-        # Q, K, V projections
-        q = self.q_proj(x)
-        k = self.k_proj(x)
-        v = self.v_proj(x)
-        
-        # Apply rotary embeddings
-        q = self.apply_rotary_pos_emb(q, pos_emb)
-        k = self.apply_rotary_pos_emb(k, pos_emb)
-        
-        # Simplified interaction (no full attention)
-        # Local-global mixing through element-wise operations
-        interaction = q * tf.reduce_mean(k, axis=1, keepdims=True) + k * tf.reduce_mean(q, axis=1, keepdims=True)
-        output = interaction * v
-        
-        return self.out_proj(output)
+        self.W_i = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_i')
+        self.W_f = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_f')
+        self.W_o = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_o')
+        self.W_c = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_c')
+
+        self.U_i = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_i')
+        self.U_f = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_f')
+        self.U_o = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_o')
+        self.U_c = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_c')
+
+        self.b_i = self.add_weight(shape=(self.units,), initializer='zeros', name='b_i')
+        self.b_f = self.add_weight(shape=(self.units,), initializer='zeros', name='b_f')
+        self.b_o = self.add_weight(shape=(self.units,), initializer='zeros', name='b_o')
+        self.b_c = self.add_weight(shape=(self.units,), initializer='zeros', name='b_c')
+
+        # Layer Normalization
+        self.ln_i = tf.keras.layers.LayerNormalization()
+        self.ln_f = tf.keras.layers.LayerNormalization()
+        self.ln_o = tf.keras.layers.LayerNormalization()
+        self.ln_c = tf.keras.layers.LayerNormalization()
+        self.ln_cell = tf.keras.layers.LayerNormalization()
+
+        self.built = True
+
+    def call(self, inputs, states):
+        h_prev, c_prev = states
+
+        # ✅ 이제 inputs: (batch, input_dim), W: (input_dim, units) → 차원 일치!
+        i_t = tf.sigmoid(self.ln_i(tf.matmul(inputs, self.W_i) + tf.matmul(h_prev, self.U_i) + self.b_i))
+        f_t = tf.sigmoid(self.ln_f(tf.matmul(inputs, self.W_f) + tf.matmul(h_prev, self.U_f) + self.b_f))
+        o_t = tf.sigmoid(self.ln_o(tf.matmul(inputs, self.W_o) + tf.matmul(h_prev, self.U_o) + self.b_o))
+        c_hat_t = tf.tanh(self.ln_c(tf.matmul(inputs, self.W_c) + tf.matmul(h_prev, self.U_c) + self.b_c))
+
+        c_t = f_t * c_prev + i_t * c_hat_t
+        c_t = self.ln_cell(c_t)
+        h_t = o_t * tf.tanh(c_t)
+
+        return h_t, [h_t, c_t]
+
+    def get_initial_state(self, inputs=None, batch_size=None, dtype=tf.float32):
+        return [
+            tf.zeros((batch_size, self.units), dtype=dtype),
+            tf.zeros((batch_size, self.units), dtype=dtype)
+        ]
+
+    @property
+    def state_size(self):
+        return [self.units, self.units]
+
+    @property
+    def output_size(self):
+        return self.units
 
 
-# 4. Depthwise Separable Convolution with Large Kernels
-class LargeKernelConv(layers.Layer):
-    def __init__(self, d_model, kernel_size=15, dropout_rate=0.1):
-        super().__init__()
-        
-        # Depthwise convolution
-        self.depthwise_conv = layers.DepthwiseConv1D(
-            kernel_size=kernel_size,
-            padding='causal',
-            use_bias=False,
-            dtype='float32'
-        )
-        
-        # Pointwise convolution
-        self.pointwise_conv = layers.Conv1D(
-            filters=d_model,
-            kernel_size=1,
-            use_bias=False,
-            dtype='float32'
-        )
-        
-        self.ln = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
-        self.dropout = layers.Dropout(dropout_rate)
-        
-    def call(self, x, training=False):
-        residual = x
-        x = self.ln(x)
-        x = self.depthwise_conv(x)
-        x = tf.nn.gelu(x)
-        x = self.pointwise_conv(x)
-        x = x + residual
-        return self.dropout(x, training=training)
+# 셀을 RNN 레이어로 감싸기
+para_lstm_layer = tf.keras.layers.RNN(
+    ParaLSTMCell(units=64),
+    return_sequences=True,
+    return_state=False,
+    name='ParaLSTM'
+)
 
-class DilatedConvLayer(layers.Layer):
-    def __init__(self, d_model, dilation_rate, dropout_rate=0.1):
-        super().__init__()
-        self.conv = layers.Conv1D(
-            filters=d_model,
-            kernel_size=3,
-            dilation_rate=dilation_rate,
-            padding='causal',
-            use_bias=True,
-            kernel_initializer='he_normal',
-            dtype='float32'
-        )
-        self.ln = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
-        self.dropout = layers.Dropout(dropout_rate)
-
-    def call(self, x, training=False):
-        residual = x
-        x = self.ln(x)             # ← Pre-LN: LN 먼저
-        x = self.conv(x)
-        x = x + residual           # ← Residual
-        x = self.dropout(x, training=training)
-        return x
-# 5. Enhanced Lamko with Token Interaction Layers
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
