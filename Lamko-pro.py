@@ -271,7 +271,11 @@ class Lamko(tf.keras.Model):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        self.blocks = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
+        self.block_1 = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
+        self.block_2 = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
+        
+        self.adapter_1 = Adapter(d_model=d_model)
+        self.adapter_2 = Adapter(d_model=d_model)
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
     def call(self, x, training=False):
@@ -280,8 +284,12 @@ class Lamko(tf.keras.Model):
 
         x = self.token_embedding(x) + self.pos_embedding(positions)  # (batch, seq_len, d_model)
 
-        x = block(x, training=training)
+        x = self.block_1(x, training=training)
+        x = self.adapter_1(x)
 
+        x = self.block_2(x, training=training)
+        x = self.adapter_2(x)
+    
         x = self.ln_f(x)  # (batch, seq_len, d_model)
 
         # ✅ 수정: 안전하게 embedding matrix 참조
