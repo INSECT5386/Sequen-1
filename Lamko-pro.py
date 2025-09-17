@@ -250,7 +250,16 @@ class SRUPlusPlus(tf.keras.layers.Layer):
         })
         return config
 
+class Adapter(layers.Layer):
+    def __init__(self, d_model, e=1/4):
+        super().__init__()
+        self.proj = layers.Dense(d_model * e, use_bias=False, dtype='float32')
+        self.out = layers.Dense(d_model, use_bias=False, dtype='float32')
 
+    def call(self, x):
+        x = self.proj(x)
+        x = 
+     
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
