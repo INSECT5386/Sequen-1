@@ -153,6 +153,8 @@ class SRUCell(tf.keras.layers.Layer):
         self.units = units
         self.activation = tf.keras.activations.get(activation)
         self.use_bias = use_bias
+        # ✅ 필수: RNN Cell은 state_size 속성을 가져야 함
+        self.state_size = self.units  # 또는 [self.units] (단일 상태)
 
     def build(self, input_shape):
         input_dim = input_shape[-1]
@@ -196,7 +198,7 @@ class SRUCell(tf.keras.layers.Layer):
         # 히든 상태
         h = r * self.activation(c) + (1.0 - r) * inputs
 
-        return h, [c]
+        return h, [c]  # 상태는 리스트로 반환
 
     def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
         return [tf.zeros((batch_size, self.units), dtype=dtype)]
@@ -209,7 +211,6 @@ class SRUCell(tf.keras.layers.Layer):
             "use_bias": self.use_bias,
         })
         return config
-
 
 class SRUPlusPlus(tf.keras.layers.Layer):
     def __init__(self, units, ffn_units=None, activation='silu', use_bias=True, **kwargs):
