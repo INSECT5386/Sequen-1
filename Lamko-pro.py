@@ -277,6 +277,7 @@ class Lamko(tf.keras.Model):
         self.adapter = Adapter(d_model=d_model)
         
         self.ffn_1 = SwiGLU(d_model=d_model)
+        self.ffn_2 = SwiGLU(d_model=d_model)
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
     def call(self, x, training=False):
@@ -286,9 +287,10 @@ class Lamko(tf.keras.Model):
         x = self.token_embedding(x) + self.pos_embedding(positions)  # (batch, seq_len, d_model)
 
         x = self.block_1(x, training=training)
+        x = self.ffn_1(x)
         x = self.adapter(x)
         x = self.block_2(x, training=training)
-        x = self.ffn_1(x)
+        x = self.ffn_2(x)
         x = self.adapter_1(x)
     
         x = self.ln_f(x)  # (batch, seq_len, d_model)
