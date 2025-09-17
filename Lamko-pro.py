@@ -287,6 +287,7 @@ class Lamko(tf.keras.Model):
         x = self.block_1(x, training=training)
         x = self.block_2(x)
         x = self.ffn_1(x)
+        x = self.adapter_1(x)
     
         x = self.ln_f(x)  # (batch, seq_len, d_model)
 
