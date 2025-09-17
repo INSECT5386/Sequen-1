@@ -226,7 +226,7 @@ class SwiGLU(layers.Layer):
 class Adapter(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
-        self.proj = layers.Dense(d_model/2, use_bias=True, dtype='float32')
+        self.proj = layers.Dense(128, use_bias=True, dtype='float32')
         self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
 
     def call(self, x):
