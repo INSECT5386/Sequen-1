@@ -249,21 +249,23 @@ class SRUPlusPlus(tf.keras.layers.Layer):
             "use_bias": self.use_bias,
         })
         return config
-
-def softish(x):
-  x = tf.nn.softmax(x) * tf.sigmoid(x) * x
-  return x
     
 class Adapter(layers.Layer):
     def __init__(self, d_model, e=1/4):
         super().__init__()
         self.proj = layers.Dense(d_model * e, use_bias=False, dtype='float32')
         self.out = layers.Dense(d_model, use_bias=False, dtype='float32')
-
+        
+    def softish(self, x):
+        x = tf.nn.softmax(x) * tf.sigmoid(x) * x
+        return x
+        
     def call(self, x):
         x = self.proj(x)
-        x = 
-     
+        x = self.softish(x)
+        x = tf.nn.softmax(x) * x
+        x = self.out(x)
+        
 class Lamko(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
