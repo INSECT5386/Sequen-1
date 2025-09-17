@@ -216,13 +216,23 @@ class SwiGLU(layers.Layer):
     def __init__(self, d_model, f_d=8/3):
         super().__init__()
         hidden_dim = int(d_model * f_d + 0.5)  # 반올림
-        self.proj = layers.Dense(hidden_dim * 2, use_bias=False, dtype='float32')
-        self.out = layers.Dense(d_model, use_bias=False, dtype='float32')
+        self.proj = layers.Dense(hidden_dim * 2, use_bias=True, dtype='float32')
+        self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
 
     def call(self, x):
         x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
         return self.out(x_val * tf.nn.silu(x_gate))
 
+class Adapter(layers.Layer):
+    def __init__(self, d_model):
+        super().__init__()
+        self.proj = layers.Dense(d_model/2, use_bias=True, dtype='float32')
+        self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
+
+    def call(self, x):
+        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
+        return self.out(x_val * tf.nn.silu(x_gate))
+        
 class SRUPlusPlus(tf.keras.layers.Layer):
     def __init__(self, units, ffn_units=None, activation='silu', use_bias=True, **kwargs):
         super(SRUPlusPlus, self).__init__(**kwargs)
