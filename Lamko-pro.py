@@ -199,8 +199,8 @@ class SRUCell(tf.keras.layers.Layer):
         h = r * self.activation(c) + (1.0 - r) * inputs
 
         return h, [c]  # 상태는 리스트로 반환
-
     def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
+        dtype = dtype or self.dtype  # None일 경우 레이어 기본 dtype 사용
         return [tf.zeros((batch_size, self.units), dtype=dtype)]
 
     def get_config(self):
