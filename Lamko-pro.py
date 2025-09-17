@@ -273,6 +273,8 @@ class Lamko(tf.keras.Model):
         self.block_1 = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
         self.block_2 = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
 
+        self.adapter_1 = Adapter(d_model=d_model)
+        
         self.ffn_1 = SwiGLU(d_model=d_model)
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
