@@ -265,7 +265,7 @@ class SRUPlusPlus(tf.keras.layers.Layer):
         })
         return config
         
-class Lamko(tf.keras.Model):
+class RNNa(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
@@ -321,7 +321,7 @@ def masked_accuracy(y_true, y_pred):
 # 모델 생성 & 학습
 # =======================
 with strategy.scope():
-    model = Lamko(vocab_size, max_seq_len=max_len, d_model=256, n_layers=9, dropout_rate=0.1)
+    model = RNNa(vocab_size, max_seq_len=max_len, d_model=256, n_layers=9, dropout_rate=0.1)
     dummy_input = tf.zeros((batch_size, max_len), dtype=tf.int32)
     _ = model(dummy_input, training=False)
     model.summary()
@@ -333,10 +333,8 @@ with strategy.scope():
 # =======================
 # 가중치 저장
 # =======================
-model.save_weights("Lamko.weights.h5")
+model.save_weights("RNNa.weights.h5")
 print("✅ 모델 가중치 저장 완료!")
-
-
 
 # =======================
 def generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.68, min_len=20):
