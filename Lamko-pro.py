@@ -250,6 +250,10 @@ class SRUPlusPlus(tf.keras.layers.Layer):
         })
         return config
 
+def softish(x):
+  x = tf.nn.softmax(x) * tf.sigmoid(x) * x
+  return x
+    
 class Adapter(layers.Layer):
     def __init__(self, d_model, e=1/4):
         super().__init__()
