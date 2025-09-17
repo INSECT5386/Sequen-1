@@ -256,7 +256,7 @@ class Lamko(tf.keras.Model):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        self.blocks = [SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True) for _ in range(n_layers)]
+        self.blocks = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
     def call(self, x, training=False):
@@ -265,8 +265,7 @@ class Lamko(tf.keras.Model):
 
         x = self.token_embedding(x) + self.pos_embedding(positions)  # (batch, seq_len, d_model)
 
-        for block in self.blocks:
-            x = block(x, training=training)
+        x = block(x, training=training)
 
         x = self.ln_f(x)  # (batch, seq_len, d_model)
 
