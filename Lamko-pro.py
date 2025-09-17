@@ -212,6 +212,17 @@ class SRUCell(tf.keras.layers.Layer):
         })
         return config
 
+class SwiGLU(layers.Layer):
+    def __init__(self, d_model, f_d=8/3):
+        super().__init__()
+        hidden_dim = int(d_model * f_d + 0.5)  # 반올림
+        self.proj = layers.Dense(hidden_dim * 2, use_bias=False, dtype='float32')
+        self.out = layers.Dense(d_model, use_bias=False, dtype='float32')
+
+    def call(self, x):
+        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
+        return self.out(x_val * tf.nn.silu(x_gate))
+
 class SRUPlusPlus(tf.keras.layers.Layer):
     def __init__(self, units, ffn_units=None, activation='silu', use_bias=True, **kwargs):
         super(SRUPlusPlus, self).__init__(**kwargs)
@@ -219,7 +230,6 @@ class SRUPlusPlus(tf.keras.layers.Layer):
         self.ffn_units = ffn_units or units * 4  # Transformer FFN 확장 비율
         self.activation = tf.keras.activations.get(activation)
         self.use_bias = use_bias
-
 
         # SRU Cell (RNN wrapper로 감쌈)
         self.sru_cell = SRUCell(units, activation=activation, use_bias=use_bias)
@@ -252,7 +262,8 @@ class Lamko(tf.keras.Model):
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
         self.block_1 = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
         self.block_2 = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
-        
+
+        self.ffn_1 = SwiGLU(d_model=d_model)
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
     def call(self, x, training=False):
@@ -263,6 +274,7 @@ class Lamko(tf.keras.Model):
 
         x = self.block_1(x, training=training)
         x = self.block_2(x)
+        x = self.ffn_1(x)
     
         x = self.ln_f(x)  # (batch, seq_len, d_model)
 
