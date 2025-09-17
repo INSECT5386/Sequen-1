@@ -143,86 +143,112 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-class ParaLSTMCell(tf.keras.layers.Layer):
-    def __init__(self, units, **kwargs):
-        super(ParaLSTMCell, self).__init__(**kwargs)
+import tensorflow as tf
+from tensorflow.keras import layers
+import tensorflow.keras.backend as K
+
+class SRUCell(tf.keras.layers.Layer):
+    def __init__(self, units, activation='tanh', use_bias=True, **kwargs):
+        super(SRUCell, self).__init__(**kwargs)
         self.units = units
-        self.input_dim = None
+        self.activation = tf.keras.activations.get(activation)
+        self.use_bias = use_bias
 
     def build(self, input_shape):
-        self.input_dim = input_shape[-1]
+        input_dim = input_shape[-1]
 
-        # 입력 → 게이트
-        self.W_i = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_i')
-        self.W_f = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_f')
-        self.W_o = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_o')
-        self.W_c = self.add_weight(shape=(self.input_dim, self.units), initializer='glorot_uniform', name='W_c')
+        # 가중치 정의: forget gate, reset gate, candidate
+        self.W_f = self.add_weight(shape=(input_dim, self.units),
+                                   initializer='glorot_uniform',
+                                   name='W_f')
+        self.W_r = self.add_weight(shape=(input_dim, self.units),
+                                   initializer='glorot_uniform',
+                                   name='W_r')
+        self.W = self.add_weight(shape=(input_dim, self.units),
+                                 initializer='glorot_uniform',
+                                 name='W')
 
-        # hidden → 게이트
-        self.U_i = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_i')
-        self.U_f = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_f')
-        self.U_o = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_o')
-        self.U_c = self.add_weight(shape=(self.units, self.units), initializer='orthogonal', name='U_c')
-
-        # Bias
-        self.b_i = self.add_weight(shape=(self.units,), initializer='zeros', name='b_i')
-        self.b_f = self.add_weight(shape=(self.units,), initializer='zeros', name='b_f')
-        self.b_o = self.add_weight(shape=(self.units,), initializer='zeros', name='b_o')
-        self.b_c = self.add_weight(shape=(self.units,), initializer='zeros', name='b_c')
-
-        # Layer Normalization
-        self.ln_i = layers.LayerNormalization()
-        self.ln_f = layers.LayerNormalization()
-        self.ln_o = layers.LayerNormalization()
-        self.ln_c = layers.LayerNormalization()
-        self.ln_cell = layers.LayerNormalization()
+        if self.use_bias:
+            self.b_f = self.add_weight(shape=(self.units,),
+                                       initializer='zeros', name='b_f')
+            self.b_r = self.add_weight(shape=(self.units,),
+                                       initializer='zeros', name='b_r')
+            self.b = self.add_weight(shape=(self.units,),
+                                     initializer='zeros', name='b')
+        else:
+            self.b_f = self.b_r = self.b = None
 
         self.built = True
 
     def call(self, inputs, states):
-        h_prev, c_prev = states
+        # inputs: [batch, features] — 이미 FFN을 거친 u_t
+        # states: [c_{t-1}]
+        prev_c = states[0]  # (batch, units)
 
-        i_t = tf.sigmoid(self.ln_i(tf.matmul(inputs, self.W_i) + tf.matmul(h_prev, self.U_i) + self.b_i))
-        f_t = tf.sigmoid(self.ln_f(tf.matmul(inputs, self.W_f) + tf.matmul(h_prev, self.U_f) + self.b_f))
-        o_t = tf.sigmoid(self.ln_o(tf.matmul(inputs, self.W_o) + tf.matmul(h_prev, self.U_o) + self.b_o))
-        c_hat_t = tf.tanh(self.ln_c(tf.matmul(inputs, self.W_c) + tf.matmul(h_prev, self.U_c) + self.b_c))
+        # 게이트 계산
+        f = tf.sigmoid(tf.matmul(inputs, self.W_f) + (self.b_f if self.use_bias else 0))
+        r = tf.sigmoid(tf.matmul(inputs, self.W_r) + (self.b_r if self.use_bias else 0))
+        x_proj = tf.matmul(inputs, self.W) + (self.b if self.use_bias else 0)
 
-        c_t = f_t * c_prev + i_t * c_hat_t
-        c_t = self.ln_cell(c_t)
-        h_t = o_t * tf.tanh(c_t)
+        # 셀 상태 업데이트
+        c = f * prev_c + (1.0 - f) * x_proj
 
-        return h_t, [h_t, c_t]
+        # 히든 상태
+        h = r * self.activation(c) + (1.0 - r) * inputs
 
-    def get_initial_state(self, inputs=None, batch_size=None, dtype=tf.float32):
-        return [
-            tf.zeros((batch_size, self.units), dtype=dtype),
-            tf.zeros((batch_size, self.units), dtype=dtype)
-        ]
+        return h, [c]
 
-    @property
-    def state_size(self):
-        return [self.units, self.units]
+    def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
+        return [tf.zeros((batch_size, self.units), dtype=dtype)]
 
-    @property
-    def output_size(self):
-        return self.units
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "units": self.units,
+            "activation": tf.keras.activations.serialize(self.activation),
+            "use_bias": self.use_bias,
+        })
+        return config
 
 
-class Block(layers.Layer):
-    def __init__(self, d_model, dropout_rate=0.1):
-        super().__init__()
-        self.rnn = tf.keras.layers.RNN(
-            ParaLSTMCell(units=d_model),
-            return_sequences=True,
-            return_state=False,
-            name='ParaLSTM'
-        )
-        self.dropout = layers.Dropout(dropout_rate)
+class SRUPlusPlus(tf.keras.layers.Layer):
+    def __init__(self, units, ffn_units=None, activation='silu', use_bias=True, **kwargs):
+        super(SRUPlusPlus, self).__init__(**kwargs)
+        self.units = units
+        self.ffn_units = ffn_units or units * 4  # Transformer FFN 확장 비율
+        self.activation = tf.keras.activations.get(activation)
+        self.use_bias = use_bias
 
-    def call(self, x, training=False):
-        x = self.rnn(x)
-        x = self.dropout(x, training=training)
-        return x
+        # FFN 구성: Dense → ReLU → Dense → Residual + LayerNorm
+        self.ffn = tf.keras.Sequential([
+            layers.Dense(self.ffn_units, activation='relu'),
+            layers.Dense(units),
+            layers.LayerNormalization()
+        ])
+
+        # SRU Cell (RNN wrapper로 감쌈)
+        self.sru_cell = SRUCell(units, activation=activation, use_bias=use_bias)
+        self.rnn = layers.RNN(self.sru_cell, return_sequences=True, return_state=False)
+
+    def call(self, inputs, training=None):
+        # Step 1: FFN path
+        u = inputs + self.ffn(inputs)  # residual
+        u = layers.LayerNormalization()(u)  # optional, 논문은 포함
+
+        # Step 2: SRU recurrence
+        outputs = self.rnn(u)
+
+        return outputs
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "units": self.units,
+            "ffn_units": self.ffn_units,
+            "activation": tf.keras.activations.serialize(self.activation),
+            "use_bias": self.use_bias,
+        })
+        return config
 
 
 class Lamko(tf.keras.Model):
@@ -230,7 +256,7 @@ class Lamko(tf.keras.Model):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        self.blocks = [Block(d_model=d_model, dropout_rate=dropout_rate) for _ in range(n_layers)]
+        self.blocks = [SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True) for _ in range(n_layers)]
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
     def call(self, x, training=False):
