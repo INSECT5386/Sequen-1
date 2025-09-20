@@ -226,6 +226,30 @@ class Adapter(layers.Layer):
         x = self.out(x)
         return x
         
+class Lo(layers.Layer):
+    def __init__(self, d_model):
+        super().__init__()
+        self.proj = layers.Dense(64, use_bias=True, dtype='float32')
+        
+    def call(self, x):
+        x = self.proj(x)
+        x = tf.nn.gelu(x)
+        return x
+        
+# Low Softmax Unit
+class LoSoU(layers.Layer):
+    def __init__(self, d_model):
+        super().__init__()
+        self.Q = Lo(d_model)
+        self.K = layers.Dense(64)
+        self.V = layers.Dense(64)
+    
+    def call(self, x):
+        x = self.proj(x)
+        x = tf.nn.gelu(x)
+        x = self.out(x)
+        return x 
+        
 class SRU(tf.keras.layers.Layer):
     def __init__(self, units, ffn_units=None, activation='silu', use_bias=True, **kwargs):
         super(SRUPlusPlus, self).__init__(**kwargs)
