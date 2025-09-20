@@ -178,7 +178,7 @@ class SwiGLU(layers.Layer):
         # 입력 텐서를 두 부분으로 분할
         x_gate, x_linear = tf.split(self.proj(x), 2, axis=-1)
         # 요청하신 활성화 함수를 적용
-        activated_x_gate = tf.nn.silu(x_gate) * x_gate
+        activated_x_gate = tf.nn.silu(x_gate)
         # 활성화된 텐서와 다른 텐서를 곱함
         x = activated_x_gate * x_linear
         return self.out(x)
