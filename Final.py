@@ -165,11 +165,10 @@ class Adapter(layers.Layer):
         self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
 
     def call(self, x):
-        re = x
         x = self.proj(x)
         x = tf.nn.gelu(x)
         x = self.out(x)
-        return x + re
+        return x
         
 class Lo(layers.Layer):
     def __init__(self, d_model):
@@ -210,10 +209,14 @@ class Block(layers.Layer):
         self.block = LoSoU(d_model=d_model)
         self.glu = SwiGLU(d_model)
         self.adapter_1 = Adapter(d_model=d_model)
-        
+        self.ln_1 = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
+        self.ln_2 = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
+
     def call(self, x):
-        x = self.block(x)
-        x = self.glu(x)
+        x_norm = ln_1(x)
+        x = self.block(x_norm) 
+        attn_norm = self.ln_2(x)
+        x = self.glu(attn_norm)
         x = self.adapter_1(x)
         return x
 
