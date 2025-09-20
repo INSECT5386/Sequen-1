@@ -315,3 +315,13 @@ prompt = "딥러닝에 대해 설명하세요."
 sample_text = generate_text_topp(model, prompt, p=0.9)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
+
+prompt = "안녕하세요."
+sample_text = generate_text_topp(model, prompt, p=0.9)
+print("\n===== 생성 결과 =====\n")
+print(sample_text)
+
+prompt = "오늘의 날씨는 어떤가요?."
+sample_text = generate_text_topp(model, prompt, p=0.9)
+print("\n===== 생성 결과 =====\n")
+print(sample_text)
