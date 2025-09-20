@@ -228,7 +228,7 @@ class SRUPlusPlus(tf.keras.layers.Layer):
         self.use_bias = use_bias
 
         # SRU Cell (RNN wrapper로 감쌈)
-        self.sru_cell = SRUCell(units, activation=activation, use_bias=use_bias)
+        self.sru_cell = LRUCell(units, activation=activation, use_bias=use_bias)
         self.rnn = layers.RNN(self.sru_cell, return_sequences=True, return_state=False)
         self.Ln = layers.LayerNormalization()
         
