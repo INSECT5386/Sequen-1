@@ -147,73 +147,6 @@ import tensorflow as tf
 from tensorflow.keras import layers
 import tensorflow.keras.backend as K
 
-class SRUCell(tf.keras.layers.Layer):
-    def __init__(self, units, activation='tanh', use_bias=True, **kwargs):
-        super(SRUCell, self).__init__(**kwargs)
-        self.units = units
-        self.activation = tf.keras.activations.get(activation)
-        self.use_bias = use_bias
-        # ✅ 필수: RNN Cell은 state_size 속성을 가져야 함
-        self.state_size = self.units  # 또는 [self.units] (단일 상태)
-
-    def build(self, input_shape):
-        input_dim = input_shape[-1]
-
-        # 가중치 정의: forget gate, reset gate, candidate
-        self.W_f = self.add_weight(shape=(input_dim, self.units),
-                                   initializer='glorot_uniform',
-                                   name='W_f')
-        self.W_r = self.add_weight(shape=(input_dim, self.units),
-                                   initializer='glorot_uniform',
-                                   name='W_r')
-        self.W = self.add_weight(shape=(input_dim, self.units),
-                                 initializer='glorot_uniform',
-                                 name='W')
-
-        if self.use_bias:
-            self.b_f = self.add_weight(shape=(self.units,),
-                                       initializer='zeros', name='b_f')
-            self.b_r = self.add_weight(shape=(self.units,),
-                                       initializer='zeros', name='b_r')
-            self.b = self.add_weight(shape=(self.units,),
-                                     initializer='zeros', name='b')
-        else:
-            self.b_f = self.b_r = self.b = None
-
-        self.built = True
-
-    def call(self, inputs, states):
-        # inputs: [batch, features] — 이미 FFN을 거친 u_t
-        # states: [c_{t-1}]
-        prev_c = states[0]  # (batch, units)
-
-        # 게이트 계산
-        f = tf.sigmoid(tf.matmul(inputs, self.W_f) + (self.b_f if self.use_bias else 0))
-        r = tf.sigmoid(tf.matmul(inputs, self.W_r) + (self.b_r if self.use_bias else 0))
-        x_proj = tf.matmul(inputs, self.W) + (self.b if self.use_bias else 0)
-
-        # 셀 상태 업데이트
-        c = f * prev_c + (1.0 - f) * x_proj
-
-        # 히든 상태
-        h = r * self.activation(c) + (1.0 - r) * inputs
-
-        return h, [c]  # 상태는 리스트로 반환
-        
-    def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
-        if dtype is None:
-            dtype = tf.float32  # 또는 self.dtype (레이어의 기본 dtype)
-        return [tf.zeros((batch_size, self.units), dtype=dtype)]
-        
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "units": self.units,
-            "activation": tf.keras.activations.serialize(self.activation),
-            "use_bias": self.use_bias,
-        })
-        return config
-
 class LRUCell(tf.keras.layers.Layer):
     def __init__(self, units, activation='tanh', use_bias=True, **kwargs):
         super(LRUCell, self).__init__(**kwargs)
@@ -227,9 +160,6 @@ class LRUCell(tf.keras.layers.Layer):
         input_dim = input_shape[-1]
 
         # 가중치 정의: forget gate, reset gate, candidate
-        self.W_r = self.add_weight(shape=(input_dim, self.units),
-                                   initializer='glorot_uniform',
-                                   name='W_r')
         self.W = self.add_weight(shape=(input_dim, self.units),
                                  initializer='glorot_uniform',
                                  name='W')
@@ -250,7 +180,7 @@ class LRUCell(tf.keras.layers.Layer):
         prev_c = states[0]  # (batch, units)
 
         x_proj = tf.matmul(inputs, self.W) + (self.b if self.use_bias else 0)
-        r = x_proj
+        r = x_proj + (self.b_r if self.use_bias else 0)
         f = tf.sigmoid(x_proj)
 
         # 셀 상태 업데이트
