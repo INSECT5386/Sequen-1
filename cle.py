@@ -250,6 +250,7 @@ class LRUCell(tf.keras.layers.Layer):
         prev_c = states[0]  # (batch, units)
 
         x_proj = tf.matmul(inputs, self.W) + (self.b if self.use_bias else 0)
+        r = x_proj
         f = tf.sigmoid(x_proj)
 
         # 셀 상태 업데이트
