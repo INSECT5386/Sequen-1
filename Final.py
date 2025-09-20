@@ -208,10 +208,7 @@ class LoSoU(layers.Layer):
         k = self.K(x)
         V = self.V(x)
 
-        g_q = tf.nn.sigmoid(q)
-        g_k = tf.nn.sigmoid(k)
-
-        score = g_q * g_k
+        score = tf.nn.sigmoid(q * k)
         score = tf.cumsum(score, axis=1)  # (B, L, D)
         x = score * V
         return self.O(x)
