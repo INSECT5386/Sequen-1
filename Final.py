@@ -142,30 +142,48 @@ dataset = tf.data.Dataset.from_generator(
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
-class SwiGLU(layers.Layer):
-    def __init__(self, d_model, f_d=8/3):
-        super().__init__()
-        hidden_dim = int(d_model * f_d + 0.5)  # 반올림
-        self.proj = layers.Dense(hidden_dim * 2, use_bias=True, dtype='float32')
-        self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
-
-    def call(self, x):
-        x_val, x = tf.split(self.proj(x), 2, axis=-1)
-        x = lambda x: tf.nn.sigmoid(x) * tf.nn.softplus(x) * x
-        return self.out(x_val * x)
+import tensorflow as tf
+from tensorflow.keras import layers
 
 class Adapter(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
-        self.proj = layers.Dense(64, use_bias=True, dtype='float32')
+        self.proj_down = layers.Dense(64, use_bias=True, dtype='float32')
+        self.proj_up = layers.Dense(d_model, use_bias=True, dtype='float32')
+
+    def call(self, x):
+        # 잔여 연결을 위해 원본 입력 저장
+        original_x = x
+        
+        # 다운-프로젝션
+        x = self.proj_down(x)
+        
+        # 요청하신 활성화 함수 적용
+        x = tf.nn.sigmoid(tf.nn.softplus(x)) * x
+        
+        # 업-프로젝션
+        x = self.proj_up(x)
+        
+        # 잔여 연결
+        return x + original_x
+
+
+class SwiGLU(layers.Layer):
+    def __init__(self, d_model, f_d=8/3):
+        super().__init__()
+        hidden_dim = int(d_model * f_d)
+        self.proj = layers.Dense(hidden_dim * 2, use_bias=True, dtype='float32')
         self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
 
     def call(self, x):
-        re = x
-        x = self.proj(x)
-        x = lambda x: tf.nn.sigmoid(x_gate) * tf.nn.softplus(x_gate) * x
-        x = self.out(x)
-        return x + re
+        # 입력 텐서를 두 부분으로 분할
+        x_gate, x_linear = tf.split(self.proj(x), 2, axis=-1)
+        # 요청하신 활성화 함수를 적용
+        activated_x_gate = tf.nn.sigmoid(tf.nn.softplus(x_gate)) * x_gate
+        # 활성화된 텐서와 다른 텐서를 곱함
+        x = activated_x_gate * x_linear
+        return self.out(x)
+
         
 class Lo(layers.Layer):
     def __init__(self, d_model):
@@ -313,16 +331,31 @@ def generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature
 # 테스트 생성
 # =======================
 prompt = "딥러닝에 대해 설명하세요."
-sample_text = generate_text_topp(model, prompt, p=0.9)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.38, min_len=20)
+print("\n===== 생성 결과 =====\n")
+print(sample_text)
+
+prompt = "딥러닝에 대해 설명하세요."
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.8, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "안녕하세요."
-sample_text = generate_text_topp(model, prompt, p=0.9)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.38, min_len=20)
+print("\n===== 생성 결과 =====\n")
+print(sample_text)
+
+prompt = "안녕하세요."
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.8, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "오늘의 날씨는 어떤가요?."
-sample_text = generate_text_topp(model, prompt, p=0.9)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.38, min_len=20)
+print("\n===== 생성 결과 =====\n")
+print(sample_text)
+
+prompt = "오늘의 날씨는 어떤가요?."
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.8, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
