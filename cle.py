@@ -147,9 +147,9 @@ import tensorflow as tf
 from tensorflow.keras import layers
 import tensorflow.keras.backend as K
 
-class LRUCell(tf.keras.layers.Layer):
+class SRUCell(tf.keras.layers.Layer):
     def __init__(self, units, activation='tanh', use_bias=True, **kwargs):
-        super(LRUCell, self).__init__(**kwargs)
+        super(SRUCell, self).__init__(**kwargs)
         self.units = units
         self.activation = tf.keras.activations.get(activation)
         self.use_bias = use_bias
@@ -160,17 +160,23 @@ class LRUCell(tf.keras.layers.Layer):
         input_dim = input_shape[-1]
 
         # 가중치 정의: forget gate, reset gate, candidate
+        self.W_f = self.add_weight(shape=(input_dim, self.units),
+                                   initializer='glorot_uniform',
+                                   name='W_f')
+        self.W_r = self.add_weight(shape=(input_dim, self.units),
+                                   initializer='glorot_uniform',
+                                   name='W_r')
         self.W = self.add_weight(shape=(input_dim, self.units),
                                  initializer='glorot_uniform',
                                  name='W')
 
         if self.use_bias:
+            self.b_f = self.add_weight(shape=(self.units,),
+                                       initializer='zeros', name='b_f')
             self.b_r = self.add_weight(shape=(self.units,),
                                        initializer='zeros', name='b_r')
             self.b = self.add_weight(shape=(self.units,),
                                      initializer='zeros', name='b')
-            self.b_f = self.add_weight(shape=(self.units,),
-                                       initializer='zeros', name='b_f')
         else:
             self.b_f = self.b_r = self.b = None
 
@@ -181,11 +187,10 @@ class LRUCell(tf.keras.layers.Layer):
         # states: [c_{t-1}]
         prev_c = states[0]  # (batch, units)
 
+        # 게이트 계산
+        f = tf.sigmoid(tf.matmul(inputs, self.W_f) + (self.b_f if self.use_bias else 0))
+        r = tf.sigmoid(tf.matmul(inputs, self.W_r) + (self.b_r if self.use_bias else 0))
         x_proj = tf.matmul(inputs, self.W) + (self.b if self.use_bias else 0)
-        r = x_proj + (self.b_r if self.use_bias else 0)
-        f = tf.sigmoid(x_proj) + (self.b_f if self.use_bias else 0)
-
-        x_proj = tf.nn.silu(x_proj) * x_proj
 
         # 셀 상태 업데이트
         c = f * prev_c + (1.0 - f) * x_proj
@@ -219,7 +224,7 @@ class Adapter(layers.Layer):
         x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
         return self.out(x_val * tf.nn.silu(x_gate))
         
-class SRUPlusPlus(tf.keras.layers.Layer):
+class SRU(tf.keras.layers.Layer):
     def __init__(self, units, ffn_units=None, activation='silu', use_bias=True, **kwargs):
         super(SRUPlusPlus, self).__init__(**kwargs)
         self.units = units
@@ -228,7 +233,7 @@ class SRUPlusPlus(tf.keras.layers.Layer):
         self.use_bias = use_bias
 
         # SRU Cell (RNN wrapper로 감쌈)
-        self.sru_cell = LRUCell(units, activation=activation, use_bias=use_bias)
+        self.sru_cell = SRUCell(units, activation=activation, use_bias=use_bias)
         self.rnn = layers.RNN(self.sru_cell, return_sequences=True, return_state=False)
         self.Ln = layers.LayerNormalization()
         
@@ -257,8 +262,8 @@ class RNNa(tf.keras.Model):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        self.block_1 = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
-        self.block_2 = SRUPlusPlus(units=d_model, ffn_units=None, activation='silu', use_bias=True)
+        self.block_1 = SRU(units=d_model, ffn_units=None, activation='silu', use_bias=True)
+        self.block_2 = SRU(units=d_model, ffn_units=None, activation='silu', use_bias=True)
 
         self.adapter_1 = Adapter(d_model=d_model)
         self.adapter = Adapter(d_model=d_model)
