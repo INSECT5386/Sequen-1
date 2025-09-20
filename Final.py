@@ -163,7 +163,7 @@ class Adapter(layers.Layer):
     def call(self, x):
         re = x
         x = self.proj(x)
-        x = tf.nn.gelu(x)
+        x = tf.nn.sigmoid(x_gate) * tf.nn.softplus(x_gate) * x
         x = self.out(x)
         return x + re
         
