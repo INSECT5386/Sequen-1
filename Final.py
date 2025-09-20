@@ -3,6 +3,9 @@ import sentencepiece as spm
 import os, json, numpy as np, tensorflow as tf
 from tensorflow.keras import layers, Model
 import requests
+from tensorflow import keras
+from tensorflow.keras import layers
+import tensorflow.keras.backend as K
 
 print("1")
 
@@ -138,14 +141,6 @@ dataset = tf.data.Dataset.from_generator(
 )
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
-
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
-
-import tensorflow as tf
-from tensorflow.keras import layers
-import tensorflow.keras.backend as K
 
 class SwiGLU(layers.Layer):
     def __init__(self, d_model, f_d=8/3):
