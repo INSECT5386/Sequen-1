@@ -186,7 +186,7 @@ class SwiGLU(layers.Layer):
 class Lo(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
-        self.proj = layers.Dense(d_model, use_bias=True, dtype='float32')
+        self.proj = layers.Dense(64, use_bias=True, dtype='float32')
         self.p = layers.Dense(64, use_bias=True, dtype='float32')
         
     def call(self, x):
@@ -194,23 +194,53 @@ class Lo(layers.Layer):
         x = tf.nn.gelu(x)
         x = self.p(x)
         return x
-        
-class LoSoU(layers.Layer):
-    def __init__(self, d_model):
-        super().__init__()
-        self.Q = layers.Dense(64)
-        self.K = layers.Dense(64)
-        self.V = Lo(d_model)
-        self.O = layers.Dense(d_model)
-    
-    def call(self, x):
-        q = self.Q(x)
-        k = self.K(x)
-        V = self.V(x)
 
-        score = tf.nn.sigmoid(q * k)
-        score = tf.cumsum(score, axis=1)  # (B, L, D)
-        x = score * V
+class LoSoU(layers.Layer):
+    def __init__(self, d_model, num_heads=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.Q = layers.Dense(64 * num_heads)  # Multi-Query: Q만 확장
+        self.K = layers.Dense(64)              # K는 공유 (64차원 고정)
+        self.V = Lo(d_model)                   # V는 Lo(MLP) — 튜닝 전용
+        self.O = layers.Dense(d_model)         # 출력 복귀
+
+    def call(self, x):
+        B, L = tf.shape(x)[0], tf.shape(x)[1]
+        
+        # Q: Multi-Query — (B, L, 64 * H) → (B, L, H, 64)
+        q = self.Q(x)
+        q = tf.reshape(q, (B, L, self.num_heads, 64))
+        
+        # K: 공유 — (B, L, 64)
+        k = self.K(x)
+        
+        # V: Lo(MLP) — (B, L, 64)
+        v = self.V(x)
+        
+        # Element-wise product: Q * K (Broadcasting: K → (B, L, 1, 64))
+        # → (B, L, H, 64)
+        gate_input = q * tf.expand_dims(k, axis=2)
+        
+        # Sigmoid → (B, L, H, 64)
+        score = tf.nn.sigmoid(gate_input)
+        
+        # ✅ L1 정규화: 각 위치/헤드에서 64차원 벡터의 합을 1로 만듦
+        # axis=-1 (64차원 방향)으로 정규화
+        score = score / (tf.reduce_sum(score, axis=-1, keepdims=True) + 1e-8)  # 안정화
+        
+        # Cumsum along sequence axis (axis=1)
+        score = tf.cumsum(score, axis=1)  # (B, L, H, 64)
+        
+        # V 확장: (B, L, 64) → (B, L, 1, 64) → Broadcasting with score
+        v = tf.expand_dims(v, axis=2)     # (B, L, 1, 64)
+        
+        # Weighted accumulation: score * v → (B, L, H, 64)
+        x = score * v
+        
+        # Concat heads: (B, L, H*64)
+        x = tf.reshape(x, (B, L, -1))
+        
+        # Project back to d_model
         return self.O(x)
 
 class Block(layers.Layer):
