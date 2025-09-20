@@ -236,6 +236,7 @@ class SRUPlusPlus(tf.keras.layers.Layer):
         self.sru_cell = SRUCell(units, activation=activation, use_bias=use_bias)
         self.rnn = layers.RNN(self.sru_cell, return_sequences=True, return_state=False)
         self.Ln = layers.LayerNormalization()
+        
     def call(self, inputs, training=None):
         # Step 1: FFN path
         u = inputs # residual
