@@ -222,11 +222,7 @@ class RNNa(tf.keras.Model):
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
         
-        self.block1 = Block(d_model=d_model)
-
-        self.block2 = Block(d_model=d_model)
-
-        self.block3 = Block(d_model=d_model)
+        self.blocks = [Block(d_model) for _ in range(n_layers)]
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
     def call(self, x, training=False):
@@ -235,9 +231,9 @@ class RNNa(tf.keras.Model):
 
         x = self.token_embedding(x) + self.pos_embedding(positions)  # (batch, seq_len, d_model)
 
-        x = self.block1(x)
-        x = self.block2(x)
-        x = self.block3(x)
+        for block in self.blocks:
+            x = block(x)
+            
         x = self.ln_f(x)  # (batch, seq_len, d_model)
 
         # ✅ 수정: 안전하게 embedding matrix 참조
