@@ -147,6 +147,17 @@ import tensorflow as tf
 from tensorflow.keras import layers
 import tensorflow.keras.backend as K
 
+class SwiGLU(layers.Layer):
+    def __init__(self, d_model, f_d=8/3):
+        super().__init__()
+        hidden_dim = int(d_model * f_d + 0.5)  # 반올림
+        self.proj = layers.Dense(hidden_dim * 2, use_bias=True, dtype='float32')
+        self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
+
+    def call(self, x):
+        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
+        return self.out(x_val * tf.nn.silu(x_gate))
+
 class Adapter(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
@@ -197,8 +208,8 @@ class RNNa(tf.keras.Model):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        self.block = SRU(units=d_model, ffn_units=None, activation='silu', use_bias=True)
-        self.adapter = LoSoU(d_model=d_model)
+        
+        self.block = LoSoU(d_model=d_model)
         self.adapter_1 = Adapter(d_model=d_model)
         
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
@@ -208,7 +219,6 @@ class RNNa(tf.keras.Model):
         positions = tf.range(seq_len)[tf.newaxis, :]  # (1, seq_len)
 
         x = self.token_embedding(x) + self.pos_embedding(positions)  # (batch, seq_len, d_model)
-        x = self.adapter(x)
         x = self.block(x, training=training)
         x = self.adapter_1(x)
     
