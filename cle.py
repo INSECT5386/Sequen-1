@@ -236,7 +236,6 @@ class Lo(layers.Layer):
         x = tf.nn.gelu(x)
         return x
         
-# Low Softmax Unit
 class LoSoU(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
@@ -245,7 +244,14 @@ class LoSoU(layers.Layer):
         self.V = Lo(d_model)
     
     def call(self, x):
-        
+        q = self.Q(x)
+        k = self.K(x)
+        V = self.V(x)
+
+        g_q = tf.nn.sigmoid(q)
+        g_k = tf.nn.sigmoid(k)
+
+        score = g_q * g_k
         
         
         return x 
