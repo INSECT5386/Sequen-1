@@ -169,7 +169,7 @@ class Adapter(layers.Layer):
 class Lo(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
-        self.proj = layers.Dense(64, use_bias=True, dtype='float32')
+        self.proj = layers.Dense(d_model, use_bias=True, dtype='float32')
         self.p = layers.Dense(64, use_bias=True, dtype='float32')
         
     def call(self, x):
