@@ -165,10 +165,11 @@ class Adapter(layers.Layer):
         self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
 
     def call(self, x):
+        re = x
         x = self.proj(x)
         x = tf.nn.gelu(x)
         x = self.out(x)
-        return x
+        return x + re
         
 class Lo(layers.Layer):
     def __init__(self, d_model):
