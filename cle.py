@@ -185,6 +185,8 @@ class LRUCell(tf.keras.layers.Layer):
         r = x_proj + (self.b_r if self.use_bias else 0)
         f = tf.sigmoid(x_proj) + (self.b_f if self.use_bias else 0)
 
+        x_proj = tf.nn.silu(x_proj) * x_proj
+
         # 셀 상태 업데이트
         c = f * prev_c + (1.0 - f) * x_proj
 
