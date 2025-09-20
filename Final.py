@@ -210,7 +210,7 @@ class Block(layers.Layer):
 
     def call(self, x):
         re = x
-        x_norm = ln_1(x)
+        x_norm = self.ln_1(x)
         x = self.block(x_norm) 
         attn_norm = self.ln_2(x)
         x = self.glu(attn_norm) + re
