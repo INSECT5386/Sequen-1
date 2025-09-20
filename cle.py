@@ -240,14 +240,14 @@ class Lo(layers.Layer):
 class LoSoU(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
-        self.Q = Lo(d_model)
+        self.Q = layers.Dense(64)
         self.K = layers.Dense(64)
-        self.V = layers.Dense(64)
+        self.V = Lo(d_model)
     
     def call(self, x):
-        x = self.proj(x)
-        x = tf.nn.gelu(x)
-        x = self.out(x)
+        
+        
+        
         return x 
         
 class SRU(tf.keras.layers.Layer):
