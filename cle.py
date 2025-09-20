@@ -221,8 +221,10 @@ class Adapter(layers.Layer):
         self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
 
     def call(self, x):
-        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
-        return self.out(x_val * tf.nn.silu(x_gate))
+        x = self.proj(x)
+        x = tf.nn.gelu(x)
+        x = self.out(x)
+        return x
         
 class SRU(tf.keras.layers.Layer):
     def __init__(self, units, ffn_units=None, activation='silu', use_bias=True, **kwargs):
