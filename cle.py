@@ -169,6 +169,8 @@ class LRUCell(tf.keras.layers.Layer):
                                        initializer='zeros', name='b_r')
             self.b = self.add_weight(shape=(self.units,),
                                      initializer='zeros', name='b')
+            self.b_f = self.add_weight(shape=(self.units,),
+                                       initializer='zeros', name='b_f')
         else:
             self.b_f = self.b_r = self.b = None
 
@@ -181,7 +183,7 @@ class LRUCell(tf.keras.layers.Layer):
 
         x_proj = tf.matmul(inputs, self.W) + (self.b if self.use_bias else 0)
         r = x_proj + (self.b_r if self.use_bias else 0)
-        f = tf.sigmoid(x_proj)
+        f = tf.sigmoid(x_proj) + (self.b_f if self.use_bias else 0)
 
         # 셀 상태 업데이트
         c = f * prev_c + (1.0 - f) * x_proj
