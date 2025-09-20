@@ -222,7 +222,7 @@ class Block(layers.Layer):
         x = self.adapter_1(x)
         return x
 
-class RNNa(tf.keras.Model):
+class Sequen(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
@@ -268,7 +268,7 @@ def masked_accuracy(y_true, y_pred):
 # 모델 생성 & 학습
 # =======================
 with strategy.scope():
-    model = RNNa(vocab_size, max_seq_len=max_len, d_model=256, n_layers=9, dropout_rate=0.1)
+    model = Sequen(vocab_size, max_seq_len=max_len, d_model=256, n_layers=9, dropout_rate=0.1)
     dummy_input = tf.zeros((batch_size, max_len), dtype=tf.int32)
     _ = model(dummy_input, training=False)
     model.summary()
