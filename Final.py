@@ -159,8 +159,7 @@ class Adapter(layers.Layer):
         x = self.proj_down(x)
         
         # 요청하신 활성화 함수 적용
-        x = tf.nn.silu(x) * x
-        
+        x = tf.nn.silu(x)
         # 업-프로젝션
         x = self.proj_up(x)
         
@@ -192,7 +191,7 @@ class Lo(layers.Layer):
         
     def call(self, x):
         x = self.proj(x)
-        x = tf.nn.sigmoid(tf.nn.softplus(x)) * x
+        x = tf.nn.gelu(x)
         x = self.p(x)
         return x
         
@@ -330,31 +329,31 @@ def generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature
 # 테스트 생성
 # =======================
 prompt = "딥러닝에 대해 설명하세요."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.58, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.68, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "딥러닝에 대해 설명하세요."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.8, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.75, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "안녕하세요."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.58, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.68, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "안녕하세요."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.8, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.75, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "오늘의 날씨는 어떤가요?."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.58, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.68, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "오늘의 날씨는 어떤가요?."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.8, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.75, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
