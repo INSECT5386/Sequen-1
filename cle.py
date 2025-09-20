@@ -297,8 +297,8 @@ class RNNa(tf.keras.Model):
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
         self.block = SRU(units=d_model, ffn_units=None, activation='silu', use_bias=True)
+        self.adapter = LoSoU(d_model=d_model)
         self.adapter_1 = Adapter(d_model=d_model)
-        self.adapter = Adapter(d_model=d_model)
         
         self.ln_f = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
