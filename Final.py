@@ -213,12 +213,13 @@ class Block(layers.Layer):
         self.ln_2 = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
 
     def call(self, x):
+        re = x
         x_norm = ln_1(x)
         x = self.block(x_norm) 
         attn_norm = self.ln_2(x)
         x = self.glu(attn_norm)
         x = self.adapter_1(x)
-        return x
+        return x + re
 
 class RNNa(tf.keras.Model):
     def __init__(self, vocab_size, max_seq_len, d_model, n_layers, dropout_rate=0.1):
