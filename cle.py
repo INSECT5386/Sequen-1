@@ -252,8 +252,8 @@ class LoSoU(layers.Layer):
         g_k = tf.nn.sigmoid(k)
 
         score = g_q * g_k
-        
-        
+        score = tf.cumsum(score, axis=1)  # (B, L, D)
+        x = score * V
         return x 
         
 class SRU(tf.keras.layers.Layer):
