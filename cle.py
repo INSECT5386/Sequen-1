@@ -227,9 +227,6 @@ class LRUCell(tf.keras.layers.Layer):
         input_dim = input_shape[-1]
 
         # 가중치 정의: forget gate, reset gate, candidate
-        self.W_f = self.add_weight(shape=(input_dim, self.units),
-                                   initializer='glorot_uniform',
-                                   name='W_f')
         self.W_r = self.add_weight(shape=(input_dim, self.units),
                                    initializer='glorot_uniform',
                                    name='W_r')
@@ -238,8 +235,6 @@ class LRUCell(tf.keras.layers.Layer):
                                  name='W')
 
         if self.use_bias:
-            self.b_f = self.add_weight(shape=(self.units,),
-                                       initializer='zeros', name='b_f')
             self.b_r = self.add_weight(shape=(self.units,),
                                        initializer='zeros', name='b_r')
             self.b = self.add_weight(shape=(self.units,),
@@ -254,10 +249,8 @@ class LRUCell(tf.keras.layers.Layer):
         # states: [c_{t-1}]
         prev_c = states[0]  # (batch, units)
 
-        # 게이트 계산
-        f = tf.sigmoid(tf.matmul(inputs, self.W_f) + (self.b_f if self.use_bias else 0))
-        r = tf.sigmoid(tf.matmul(inputs, self.W_r) + (self.b_r if self.use_bias else 0))
         x_proj = tf.matmul(inputs, self.W) + (self.b if self.use_bias else 0)
+        f = tf.sigmoid(x_proj)
 
         # 셀 상태 업데이트
         c = f * prev_c + (1.0 - f) * x_proj
