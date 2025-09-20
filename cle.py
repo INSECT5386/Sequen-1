@@ -302,6 +302,7 @@ def masked_accuracy(y_true, y_pred):
     pred_id = tf.argmax(y_pred, axis=-1, output_type=tf.int32)
     acc = tf.cast(tf.equal(y_true, pred_id), tf.float32) * mask
     return tf.reduce_sum(acc) / (tf.reduce_sum(mask) + 1e-8)
+    
 # =======================
 # 모델 생성 & 학습
 # =======================
