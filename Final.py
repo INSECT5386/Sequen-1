@@ -150,9 +150,9 @@ class SwiGLU(layers.Layer):
         self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
 
     def call(self, x):
-        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
-        gating = tf.nn.sigmoid(x_gate) * tf.nn.softplus(x_gate) * x
-        return self.out(x_val * x_gate)
+        x_val, x = tf.split(self.proj(x), 2, axis=-1)
+        x = lambda x: tf.nn.sigmoid(x) * tf.nn.softplus(x) * x
+        return self.out(x_val * x)
 
 class Adapter(layers.Layer):
     def __init__(self, d_model):
@@ -163,7 +163,7 @@ class Adapter(layers.Layer):
     def call(self, x):
         re = x
         x = self.proj(x)
-        x = tf.nn.sigmoid(x_gate) * tf.nn.softplus(x_gate) * x
+        x = lambda x: tf.nn.sigmoid(x_gate) * tf.nn.softplus(x_gate) * x
         x = self.out(x)
         return x + re
         
