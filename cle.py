@@ -262,9 +262,7 @@ class RNNa(tf.keras.Model):
         super().__init__()
         self.token_embedding = layers.Embedding(vocab_size, d_model, dtype='float32')
         self.pos_embedding = layers.Embedding(max_seq_len, d_model, dtype='float32')
-        self.block_1 = SRU(units=d_model, ffn_units=None, activation='silu', use_bias=True)
-        self.block_2 = SRU(units=d_model, ffn_units=None, activation='silu', use_bias=True)
-
+        self.block = SRU(units=d_model, ffn_units=None, activation='silu', use_bias=True)
         self.adapter_1 = Adapter(d_model=d_model)
         self.adapter = Adapter(d_model=d_model)
         
@@ -275,10 +273,8 @@ class RNNa(tf.keras.Model):
         positions = tf.range(seq_len)[tf.newaxis, :]  # (1, seq_len)
 
         x = self.token_embedding(x) + self.pos_embedding(positions)  # (batch, seq_len, d_model)
-
-        x = self.block_1(x, training=training)
         x = self.adapter(x)
-        x = self.block_2(x, training=training)
+        x = self.block(x, training=training)
         x = self.adapter_1(x)
     
         x = self.ln_f(x)  # (batch, seq_len, d_model)
