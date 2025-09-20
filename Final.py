@@ -159,7 +159,7 @@ class Adapter(layers.Layer):
         x = self.proj_down(x)
         
         # 요청하신 활성화 함수 적용
-        x = tf.nn.sigmoid(tf.nn.softplus(x)) * x
+        x = tf.nn.silu(x) * x
         
         # 업-프로젝션
         x = self.proj_up(x)
@@ -179,11 +179,10 @@ class SwiGLU(layers.Layer):
         # 입력 텐서를 두 부분으로 분할
         x_gate, x_linear = tf.split(self.proj(x), 2, axis=-1)
         # 요청하신 활성화 함수를 적용
-        activated_x_gate = tf.nn.sigmoid(tf.nn.softplus(x_gate)) * x_gate
+        activated_x_gate = tf.nn.silu(x_gate) * x_gate
         # 활성화된 텐서와 다른 텐서를 곱함
         x = activated_x_gate * x_linear
         return self.out(x)
-
         
 class Lo(layers.Layer):
     def __init__(self, d_model):
@@ -193,7 +192,7 @@ class Lo(layers.Layer):
         
     def call(self, x):
         x = self.proj(x)
-        x = tf.nn.gelu(x)
+        x = tf.nn.sigmoid(tf.nn.softplus(x)) * x
         x = self.p(x)
         return x
         
@@ -331,7 +330,7 @@ def generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature
 # 테스트 생성
 # =======================
 prompt = "딥러닝에 대해 설명하세요."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.38, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.58, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
@@ -341,7 +340,7 @@ print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "안녕하세요."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.38, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.58, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
@@ -351,7 +350,7 @@ print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "오늘의 날씨는 어떤가요?."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.38, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.58, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
