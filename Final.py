@@ -151,7 +151,8 @@ class SwiGLU(layers.Layer):
 
     def call(self, x):
         x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
-        return self.out(x_val * tf.nn.silu(x_gate))
+        gating = tf.nn.sigmoid(x_gate) * tf.nn.softplus(x_gate) * x
+        return self.out(x_val * x_gate)
 
 class Adapter(layers.Layer):
     def __init__(self, d_model):
