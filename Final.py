@@ -182,11 +182,11 @@ class GroupChannelGate(layers.Layer):
 class Lo(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
-        self.proj = layers.Dense(64, use_bias=True, dtype='float32')
-    
+        self.proj = layers.Dense(d_model, use_bias=True, dtype='float32')
+        self.p = layers.Dense(64)
+        
     def call(self, x):
-        x = self.proj(x)
-        x = tf.nn.gelu(x)
+        x = self.p(tf.nn.gelu(self.proj(x)))
         return x
 
 class LoSoU(layers.Layer):
