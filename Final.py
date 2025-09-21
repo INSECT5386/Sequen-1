@@ -308,7 +308,7 @@ with strategy.scope():
 # =======================
 # 가중치 저장
 # =======================
-model.save_weights("RNNa.weights.h5")
+model.save_weights("Sequen.weights.h5")
 print("✅ 모델 가중치 저장 완료!")
 
 # =======================
