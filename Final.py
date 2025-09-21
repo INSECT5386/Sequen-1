@@ -186,7 +186,7 @@ class Lo(layers.Layer):
         self.p = layers.Dense(64)
         
     def call(self, x):
-        x = self.p(tf.nn.silu(self.proj(x)))
+        x = self.p(tf.nn.gelu(self.proj(x)))
         return x
 
 class LoSoU(layers.Layer):
