@@ -166,33 +166,14 @@ class Adapter(layers.Layer):
         # 잔여 연결
         return x + original_x
 
-
-class SwiGLU(layers.Layer):
-    def __init__(self, d_model, f_d=8/3):
-        super().__init__()
-        hidden_dim = int(d_model * f_d)
-        self.proj = layers.Dense(hidden_dim * 2, use_bias=True, dtype='float32')
-        self.out = layers.Dense(d_model, use_bias=True, dtype='float32')
-
-    def call(self, x):
-        # 입력 텐서를 두 부분으로 분할
-        x_gate, x_linear = tf.split(self.proj(x), 2, axis=-1)
-        # 요청하신 활성화 함수를 적용
-        activated_x_gate = tf.nn.silu(x_gate)
-        # 활성화된 텐서와 다른 텐서를 곱함
-        x = activated_x_gate * x_linear
-        return self.out(x)
-        
 class Lo(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
-        self.proj = layers.Dense(128, use_bias=True, dtype='float32')
-        self.p = layers.Dense(64, use_bias=True, dtype='float32')
-        
+        self.proj = layers.Dense(64, use_bias=True, dtype='float32')
+    
     def call(self, x):
         x = self.proj(x)
         x = tf.nn.gelu(x)
-        x = self.p(x)
         return x
 
 class LoSoU(layers.Layer):
@@ -244,21 +225,16 @@ class LoSoU(layers.Layer):
         return self.O(x)
 
 class Block(layers.Layer):
-    def __init__(self, d_model):
+    def __init__(self, d_model, num_heads=4, num_groups=8):
         super().__init__()
-        self.block = LoSoU(d_model=d_model)
-        self.glu = SwiGLU(d_model)
-        self.adapter_1 = Adapter(d_model=d_model)
-        self.ln_1 = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
-        self.ln_2 = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
+        self.losou = LoSoU(d_model, num_heads)
+        self.group_gate = GroupChannelGate(d_model, num_groups)
+        self.norm1 = layers.LayerNormalization()
+        self.norm2 = layers.LayerNormalization()
 
     def call(self, x):
-        re = x
-        x_norm = self.ln_1(x)
-        x = self.block(x_norm) 
-        attn_norm = self.ln_2(x)
-        x = self.glu(attn_norm) + re
-        x = self.adapter_1(x)
+        x = x + self.losou(self.norm1(x))      # Token Mixing
+        x = x + self.group_gate(self.norm2(x)) # Channel Mixing (Group-wise)
         return x
 
 class Sequen(tf.keras.Model):
