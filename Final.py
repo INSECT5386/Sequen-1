@@ -366,7 +366,7 @@ def generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature
 # 테스트 생성
 # =======================
 prompt = "딥러닝에 대해 설명하세요."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.68, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.75, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
@@ -376,7 +376,7 @@ print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "안녕하세요."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.68, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.75, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
@@ -386,7 +386,7 @@ print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
 prompt = "오늘의 날씨는 어떤가요?."
-sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.68, min_len=20)
+sample_text = generate_text_topp(model, prompt, max_len=96, max_gen=96, p=0.9, temperature=0.75, min_len=20)
 print("\n===== 생성 결과 =====\n")
 print(sample_text)
 
