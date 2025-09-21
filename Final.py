@@ -186,7 +186,7 @@ class Lo(layers.Layer):
         self.p = layers.Dense(64)
         
     def call(self, x):
-        x = self.p(tf.nn.gelu(self.proj(x)))
+        x = self.p(tf.nn.silu(self.proj(x)))
         return x
 
 class LoSoU(layers.Layer):
@@ -216,7 +216,7 @@ class LoSoU(layers.Layer):
         gate_input = q * tf.expand_dims(k, axis=2)
         
         # Sigmoid → (B, L, H, 64)
-        score = tf.nn.sigmoid(gate_input)
+        score = tf.nn.silu(gate_input)
         
         # ✅ L1 정규화: 각 위치/헤드에서 64차원 벡터의 합을 1로 만듦
         # axis=-1 (64차원 방향)으로 정규화
