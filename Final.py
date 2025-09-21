@@ -145,27 +145,6 @@ dist_dataset = strategy.experimental_distribute_dataset(dataset)
 import tensorflow as tf
 from tensorflow.keras import layers
 
-class Adapter(layers.Layer):
-    def __init__(self, d_model):
-        super().__init__()
-        self.proj_down = layers.Dense(64, use_bias=True, dtype='float32')
-        self.proj_up = layers.Dense(d_model, use_bias=True, dtype='float32')
-
-    def call(self, x):
-        # 잔여 연결을 위해 원본 입력 저장
-        original_x = x
-        
-        # 다운-프로젝션
-        x = self.proj_down(x)
-        
-        # 요청하신 활성화 함수 적용
-        x = tf.nn.silu(x)
-        # 업-프로젝션
-        x = self.proj_up(x)
-        
-        # 잔여 연결
-        return x + original_x
-
 class GroupChannelGate(layers.Layer):
     def __init__(self, d_model, num_groups=4, name="group_channel_gate"):
         super().__init__(name=name)
