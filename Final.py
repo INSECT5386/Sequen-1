@@ -166,6 +166,40 @@ class Adapter(layers.Layer):
         # 잔여 연결
         return x + original_x
 
+class GroupChannelGate(layers.Layer):
+    def __init__(self, d_model, num_groups=4, name="group_channel_gate"):
+        super().__init__(name=name)
+        self.num_groups = num_groups
+        assert d_model % num_groups == 0, "d_model must be divisible by num_groups"
+        
+        # 각 그룹에 대해 하나의 게이트 출력 — 총 G개 게이트
+        self.gate_proj = layers.Dense(num_groups, use_bias=True)
+
+    def call(self, x):
+        """
+        x: (B, N, D)
+        출력: (B, N, D) — 각 그룹별로 독립적인 스칼라 게이트 적용
+        """
+        B, N, D = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
+        G = self.num_groups
+        D_per_group = D // G  # 각 그룹의 차원 수
+
+        # (B, N, D) → (B, N, G, D//G)
+        x_reshaped = tf.reshape(x, (B, N, G, D_per_group))
+
+        # 게이트 생성: (B, N, G) — 각 그룹에 하나의 스칼라 게이트
+        gate = self.gate_proj(x)  # (B, N, G)
+        gate = tf.nn.sigmoid(gate)  # (B, N, G) — 0~1 사이 값
+
+        # (B, N, G) → (B, N, G, 1) — 브로드캐스팅 위해 확장
+        gate = tf.expand_dims(gate, axis=-1)  # (B, N, G, 1)
+
+        # 게이트 적용: (B, N, G, D//G) * (B, N, G, 1) → (B, N, G, D//G)
+        x_gated = x_reshaped * gate
+
+        # 다시 원래 shape으로 복구: (B, N, D)
+        return tf.reshape(x_gated, (B, N, D))
+
 class Lo(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
