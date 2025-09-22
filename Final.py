@@ -195,7 +195,6 @@ class LoSoU(layers.Layer):
         self.K = layers.Dense(64)              # K는 공유 (64차원 고정)
         self.V = Lo(d_model)                   # V는 Lo(MLP) — 튜닝 전용
         self.O = layers.Dense(d_model)   
-        self.scale = GroupChannelGate(d_model, num_groups=32)
         self.norm = layers.LayerNormalization()
 
 
@@ -240,7 +239,7 @@ class LoSoU(layers.Layer):
         x = self.norm(x)
 
         # Project back to d_model
-        return self.scale(x)
+        return x
 
 class Block(layers.Layer):
     def __init__(self, d_model, num_heads=8, num_groups=32):
