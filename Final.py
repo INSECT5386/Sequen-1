@@ -143,7 +143,7 @@ dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
 class GroupChannelGate(layers.Layer):
-    def __init__(self, d_model, num_groups=4, name="group_channel_gate"):
+    def __init__(self, d_model, num_groups=8, name="group_channel_gate"):
         super().__init__(name=name)
         self.num_groups = num_groups
         assert d_model % num_groups == 0, "d_model must be divisible by num_groups"
@@ -246,9 +246,11 @@ class Block(layers.Layer):
     def __init__(self, d_model, num_heads=8):
         super().__init__()
         self.losou = [LoSoU(d_model, num_heads) for _ in range(4)]
+        self.g = GroupChannelGate(d_model)
     def call(self, x):
         for losou in self.losou:
-            x = losou(x)      # Token Mixing
+            x = losou(x)     
+        x = self.g(x)# Token Mixing
         return x
 
 class Sequen(tf.keras.Model):
