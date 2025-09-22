@@ -176,38 +176,6 @@ class GroupChannelGate(layers.Layer):
         # 다시 원래 shape으로 복구: (B, N, D)
         return tf.reshape(x_gated, (B, N, D))
 
-class GroupChannelMLP(layers.Layer):
-    def __init__(self, d_model, num_groups=4, expansion=2, activation="gelu", name="group_channel_mlp"):
-        super().__init__(name=name)
-        self.num_groups = num_groups
-        assert d_model % num_groups == 0, "d_model must be divisible by num_groups"
-        self.d_per_group = d_model // num_groups
-        self.expansion = expansion
-        self.activation = tf.keras.activations.get(activation)
-
-        # 그룹별 MLP를 하나의 Dense로 구현 (group dimension까지 flatten 처리)
-        self.fc1 = layers.Dense(self.d_per_group * expansion, use_bias=True)
-        self.fc2 = layers.Dense(self.d_per_group, use_bias=True)
-
-    def call(self, x):
-        """
-        x: (B, N, D)
-        출력: (B, N, D) — 그룹별 독립적인 MLP 적용
-        """
-        B, N, D = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
-        G, Dg = self.num_groups, self.d_per_group
-
-        # (B, N, D) → (B, N, G, Dg)
-        x = tf.reshape(x, (B, N, G, Dg))
-
-        # 그룹별 MLP
-        h = self.fc1(x)                  # (B, N, G, expansion*Dg)
-        h = self.activation(h)
-        h = self.fc2(h)                  # (B, N, G, Dg)
-
-        # 다시 원래 shape으로 복구: (B, N, D)
-        return tf.reshape(h, (B, N, D))
-
 
 class Lo(layers.Layer):
     def __init__(self, d_model):
@@ -227,7 +195,9 @@ class LoSoU(layers.Layer):
         self.K = layers.Dense(64)              # K는 공유 (64차원 고정)
         self.V = Lo(d_model)                   # V는 Lo(MLP) — 튜닝 전용
         self.O = layers.Dense(d_model)   
-        self.scale = GroupChannelGate(d_model, num_groups=8)
+        self.scale = GroupChannelGate(d_model, num_groups=32)
+        self.norm = layers.LayerNormalization()
+
 
     def call(self, x):
         B, L = tf.shape(x)[0], tf.shape(x)[1]
@@ -247,7 +217,7 @@ class LoSoU(layers.Layer):
         gate_input = q * tf.expand_dims(k, axis=2)
         
         # Sigmoid → (B, L, H, 64)
-        score = tf.nn.silu(gate_input)
+        score = tf.nn.sigmoid(gate_input)
         
         # ✅ L1 정규화: 각 위치/헤드에서 64차원 벡터의 합을 1로 만듦
         # axis=-1 (64차원 방향)으로 정규화
@@ -267,6 +237,8 @@ class LoSoU(layers.Layer):
 
         x = self.O(x)
 
+        x = self.norm(x)
+
         # Project back to d_model
         return self.scale(x)
 
@@ -274,13 +246,10 @@ class Block(layers.Layer):
     def __init__(self, d_model, num_heads=8, num_groups=32):
         super().__init__()
         self.losou = LoSoU(d_model, num_heads)
-        self.group_gate = GroupChannelMLP(d_model, num_groups)
         self.norm1 = layers.LayerNormalization()
-        self.norm2 = layers.LayerNormalization()
-
+        
     def call(self, x):
         x = x + self.losou(self.norm1(x))      # Token Mixing
-        x = x + self.group_gate(self.norm2(x)) # Channel Mixing (Group-wise)
         return x
 
 class Sequen(tf.keras.Model):
