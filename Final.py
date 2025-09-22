@@ -142,9 +142,6 @@ dataset = tf.data.Dataset.from_generator(
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
-import tensorflow as tf
-from tensorflow.keras import layers
-
 class GroupChannelGate(layers.Layer):
     def __init__(self, d_model, num_groups=4, name="group_channel_gate"):
         super().__init__(name=name)
@@ -179,6 +176,39 @@ class GroupChannelGate(layers.Layer):
         # 다시 원래 shape으로 복구: (B, N, D)
         return tf.reshape(x_gated, (B, N, D))
 
+class GroupChannelMLP(layers.Layer):
+    def __init__(self, d_model, num_groups=4, expansion=2, activation="gelu", name="group_channel_mlp"):
+        super().__init__(name=name)
+        self.num_groups = num_groups
+        assert d_model % num_groups == 0, "d_model must be divisible by num_groups"
+        self.d_per_group = d_model // num_groups
+        self.expansion = expansion
+        self.activation = tf.keras.activations.get(activation)
+
+        # 그룹별 MLP를 하나의 Dense로 구현 (group dimension까지 flatten 처리)
+        self.fc1 = layers.Dense(self.d_per_group * expansion, use_bias=True)
+        self.fc2 = layers.Dense(self.d_per_group, use_bias=True)
+
+    def call(self, x):
+        """
+        x: (B, N, D)
+        출력: (B, N, D) — 그룹별 독립적인 MLP 적용
+        """
+        B, N, D = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
+        G, Dg = self.num_groups, self.d_per_group
+
+        # (B, N, D) → (B, N, G, Dg)
+        x = tf.reshape(x, (B, N, G, Dg))
+
+        # 그룹별 MLP
+        h = self.fc1(x)                  # (B, N, G, expansion*Dg)
+        h = self.activation(h)
+        h = self.fc2(h)                  # (B, N, G, Dg)
+
+        # 다시 원래 shape으로 복구: (B, N, D)
+        return tf.reshape(h, (B, N, D))
+
+
 class Lo(layers.Layer):
     def __init__(self, d_model):
         super().__init__()
@@ -196,7 +226,8 @@ class LoSoU(layers.Layer):
         self.Q = layers.Dense(64 * num_heads)  # Multi-Query: Q만 확장
         self.K = layers.Dense(64)              # K는 공유 (64차원 고정)
         self.V = Lo(d_model)                   # V는 Lo(MLP) — 튜닝 전용
-        self.O = layers.Dense(d_model)         # 출력 복귀
+        self.O = layers.Dense(d_model)   
+        self.scale = GroupChannelGate(d_model, num_groups=8)
 
     def call(self, x):
         B, L = tf.shape(x)[0], tf.shape(x)[1]
@@ -233,9 +264,11 @@ class LoSoU(layers.Layer):
         
         # Concat heads: (B, L, H*64)
         x = tf.reshape(x, (B, L, -1))
-        
+
+        x = self.O(x)
+
         # Project back to d_model
-        return self.O(x)
+        return self.scale(x)
 
 class Block(layers.Layer):
     def __init__(self, d_model, num_heads=8, num_groups=32):
