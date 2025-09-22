@@ -196,9 +196,12 @@ class LoSoU(layers.Layer):
         self.V = Lo(d_model)                   # V는 Lo(MLP) — 튜닝 전용
         self.O = layers.Dense(d_model)   
         self.norm = layers.LayerNormalization()
-
+        self.norm1 = layers.LayerNormalization()
+        
 
     def call(self, x):
+        re = x
+        x = self.norm1(x)
         B, L = tf.shape(x)[0], tf.shape(x)[1]
         
         # Q: Multi-Query — (B, L, 64 * H) → (B, L, H, 64)
@@ -236,19 +239,16 @@ class LoSoU(layers.Layer):
 
         x = self.O(x)
 
-        x = self.norm(x)
-
-        # Project back to d_model
-        return x
+        x = self.norm(x)     # Project back to d_model
+        return x + re
 
 class Block(layers.Layer):
-    def __init__(self, d_model, num_heads=8, num_groups=32):
+    def __init__(self, d_model, num_heads=8):
         super().__init__()
-        self.losou = LoSoU(d_model, num_heads)
-        self.norm1 = layers.LayerNormalization()
-        
+        self.losou = [LoSoU(d_model, num_heads) for _ in range(4)]
     def call(self, x):
-        x = x + self.losou(self.norm1(x))      # Token Mixing
+        for losou in self.losou:
+            x = losou(x)      # Token Mixing
         return x
 
 class Sequen(tf.keras.Model):
