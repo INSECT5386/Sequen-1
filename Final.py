@@ -247,7 +247,7 @@ class LoSoU(layers.Layer):
 class Block(layers.Layer):
     def __init__(self, d_model, num_heads=8):
         super().__init__()
-        self.losou = [LoSoU(d_model, num_heads) for _ in range(4)]
+        self.losou = [LoSoU(d_model, num_heads) for _ in range(3)]
         self.g = GroupChannelGate(d_model)
         
     def call(self, x):
