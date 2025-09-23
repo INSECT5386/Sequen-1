@@ -248,12 +248,10 @@ class Block(layers.Layer):
     def __init__(self, d_model, num_heads=8):
         super().__init__()
         self.losou = [LoSoU(d_model, num_heads) for _ in range(3)]
-        self.g = GroupChannelGate(d_model)
         
     def call(self, x):
         for losou in self.losou:
             x = losou(x)     
-        x = self.g(x)# Token Mixing
         return x
 
 class Sequen(tf.keras.Model):
