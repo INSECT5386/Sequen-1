@@ -197,7 +197,7 @@ class LoSoU(layers.Layer):
         self.O = layers.Dense(d_model)   
         self.norm = layers.LayerNormalization()
         self.norm1 = layers.LayerNormalization()
-        
+        self.proj = layers.Dense(d_model, use_bias=False, dtype='float32')
 
     def call(self, x):
         re = x
@@ -236,33 +236,23 @@ class LoSoU(layers.Layer):
         
         # Concat heads: (B, L, H*64)
         x = tf.reshape(x, (B, L, -1))
+        x = self.proj(x)
 
-        x = self.O(x)
+        a, b = tf.split(x, 2, axis=-1)
 
+        x = self.O(tf.nn.silu(a) * b)
         x = self.norm(x)     # Project back to d_model
         return x + re
-
-class SwiGLU(layers.Layer):
-    def __init__(self, d_model, f_d=8/3):
-        super().__init__()
-        hidden_dim = int(d_model * f_d + 0.5)  # 반올림
-        self.proj = layers.Dense(hidden_dim * 2, use_bias=False, dtype='float32')
-        self.out = layers.Dense(d_model, use_bias=False, dtype='float32')
-
-    def call(self, x):
-        x_val, x_gate = tf.split(self.proj(x), 2, axis=-1)
-        return self.out(x_val * tf.nn.silu(x_gate))
 
 class Block(layers.Layer):
     def __init__(self, d_model, num_heads=8):
         super().__init__()
         self.losou = [LoSoU(d_model, num_heads) for _ in range(4)]
         self.g = GroupChannelGate(d_model)
-        self.glu = SwiGLU(d_model)
+        
     def call(self, x):
         for losou in self.losou:
             x = losou(x)     
-        x = self.glu(x)
         x = self.g(x)# Token Mixing
         return x
 
