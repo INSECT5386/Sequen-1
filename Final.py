@@ -142,62 +142,118 @@ dataset = tf.data.Dataset.from_generator(
 dataset = dataset.shuffle(1000, seed=SEED).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 dist_dataset = strategy.experimental_distribute_dataset(dataset)
 
-class LoSoU(layers.Layer):
-    def __init__(self, d_model, num_heads=4):
+class Lo(layers.Layer):
+    def __init__(self, d_model):
         super().__init__()
-        self.num_heads = num_heads
-        self.Q = layers.Dense(64 * num_heads)  # Multi-Query: Q만 확장
-        self.K = layers.Dense(64)              # K는 공유 (64차원 고정)
-        self.V = layers.Dense(64)                 # V는 Lo(MLP) — 튜닝 전용
-        self.O = layers.Dense(d_model)   
-        self.norm = layers.LayerNormalization()
-        self.norm1 = layers.LayerNormalization()
-        self.proj = layers.Dense(204, use_bias=True, dtype='float32')
+        # 내부 계산은 float32로 유지
+        self.proj = layers.Dense(d_model, use_bias=True, dtype='float32')
+        self.p = layers.Dense(128, use_bias=True, dtype='float32')
+        self._out_dtype = 'bfloat16' if on_tpu else 'float32'
 
     def call(self, x):
-        re = x
-        x = self.norm1(x)
-        B, L = tf.shape(x)[0], tf.shape(x)[1]
-        
-        # Q: Multi-Query — (B, L, 64 * H) → (B, L, H, 64)
-        q = self.Q(x)
-        q = tf.reshape(q, (B, L, self.num_heads, 64))
-        
-        # K: 공유 — (B, L, 64)
-        k = self.K(x)
-        
-        # V: Lo(MLP) — (B, L, 64)
-        v = self.V(x)
-        
-        # Element-wise product: Q * K (Broadcasting: K → (B, L, 1, 64))
-        # → (B, L, H, 64)
-        gate_input = q * tf.expand_dims(k, axis=2)
-        
-        # Sigmoid → (B, L, H, 64)
-        score = tf.nn.sigmoid(gate_input)
-        
-        # ✅ L1 정규화: 각 위치/헤드에서 64차원 벡터의 합을 1로 만듦
-        # axis=-1 (64차원 방향)으로 정규화
-        score = score / (tf.reduce_sum(score, axis=-1, keepdims=True) + 1e-8)  # 안정화
-        
-        # Cumsum along sequence axis (axis=1)
-        score = tf.cumsum(score, axis=1)  # (B, L, H, 64)
-        
-        # V 확장: (B, L, 64) → (B, L, 1, 64) → Broadcasting with score
-        v = tf.expand_dims(v, axis=2)     # (B, L, 1, 64)
-        
-        # Weighted accumulation: score * v → (B, L, H, 64)
-        x = score * v
-        
-        # Concat heads: (B, L, H*64)
-        x = tf.reshape(x, (B, L, -1))
-        x = self.proj(x)
+        # x may be bfloat16; cast to float32 for stable intermediate computation
+        x_f32 = tf.cast(x, tf.float32)
+        x = self.proj(x_f32)
+        x = tf.nn.gelu(x)
+        x = self.p(x)
+        # cast back to model dtype for consistency
+        return tf.cast(x, self._out_dtype)
 
-        a, b = tf.split(x, 2, axis=-1)
+class LoSoU(layers.Layer):
+    """
+    안정화된 LoSoU 레이어
+    - 누적합 대신 지수이동평균(EMA) 사용 (alpha: smoothing factor)
+    - 내부 계산은 float32로 수행 (TPU bfloat16 안정성 향상)
+    - EMA 결과 클리핑 및 작은 epsilon 적용
+    - 안전한 split 처리 (짝수 차원 가정; 아니라면 마지막 차원 pad 필요)
+    """
+    def __init__(self, d_model, alpha=0.15, clip_value=5.0, eps=1e-6):
+        super().__init__()
+        # 대부분 연산을 float32로 수행
+        self.d_model = d_model
+        self.alpha = float(alpha)
+        self.clip_value = float(clip_value)
+        self.eps = float(eps)
 
-        x = self.O(tf.nn.silu(a) * b)
-        x = self.norm(x)     # Project back to d_model
-        return x + re
+        # projection / gating layers in float32
+        self.Q = layers.Dense(128, dtype='float32')
+        self.K = layers.Dense(128, dtype='float32')
+        # V produces d_model so keep it float32 internally
+        self.V = Lo(d_model)  # Lo already handles casting to model dtype; we'll cast back to float32
+        self.proj = layers.Dense(d_model, use_bias=True, dtype='float32')
+        self.O = layers.Dense(d_model, dtype='float32')
+        self.norm = layers.LayerNormalization(epsilon=1e-5, dtype='float32')
+
+    def _ema_over_time(self, score):
+        # score: (B, L, D) float32 in [0,1] roughly
+        alpha = tf.constant(self.alpha, dtype=score.dtype)
+
+        # transpose to (L, B, D) to scan over time steps
+        seq = tf.transpose(score, perm=[1, 0, 2])
+
+        def step(prev_ema, x_t):
+            # prev_ema: (B, D), x_t: (B, D)
+            new = alpha * x_t + (1.0 - alpha) * prev_ema
+            return new
+
+        # 초기값을 첫 step 값으로 설정
+        init = seq[0]  
+
+        ema_seq = tf.scan(fn=step, elems=seq[1:], initializer=init)
+        ema_seq = tf.concat([tf.expand_dims(init, 0), ema_seq], axis=0)  # (L, B, D)
+
+        # transpose back to (B, L, D)
+        ema = tf.transpose(ema_seq, perm=[1, 0, 2])
+        return ema
+        
+    def call(self, x):
+        # x: (B, L, d_model) maybe bfloat16 or float32
+        # cast to float32 for all internal computations
+        x_f32 = tf.cast(x, tf.float32)
+        residual = x_f32
+
+        # Q, K, V
+        q = self.Q(x_f32)   # (B, L, 128)
+        k = self.K(x_f32)   # (B, L, 128)
+        V = tf.cast(self.V(x), tf.float32)  # ensure V's output is float32
+
+        # gating signals in (0,1)
+        g_q = tf.nn.sigmoid(q)
+        g_k = tf.nn.sigmoid(k)
+
+        # elementwise product -> bounded roughly [0,1]
+        score = g_q * g_k
+
+        # EMA across time (stable alternative to cumsum)
+        score_ema = self._ema_over_time(score)
+
+        # optionally normalize by (mean + eps) across last dim to reduce scale variations
+        mean_last = tf.reduce_mean(score_ema, axis=-1, keepdims=True)  # (B, L, 1)
+        denom = tf.maximum(mean_last, self.eps)
+        score_norm = score_ema / denom
+
+        # clip to avoid extremes
+        score_clipped = tf.clip_by_value(score_norm, -self.clip_value, self.clip_value)
+
+        # combine with V
+        x_comb = score_clipped * V  # (B, L, d_model)
+
+        out = self.proj(x_comb)  # (B, L, d_model)
+
+        # ensure out dim even for split
+        d = out.shape[-1]  # this is an int (static shape)
+        if d is not None and d % 2 == 1:
+            out = tf.pad(out, [[0,0],[0,0],[0,1]])
+
+
+        a, b = tf.split(out, 2, axis=-1)
+        gated = tf.nn.silu(a) * b
+        out = self.O(gated)
+
+        out = self.norm(out + residual)
+
+        # cast back to original dtype for downstream layers
+        return tf.cast(out, x.dtype) 
 
 class Block(layers.Layer):
     def __init__(self, d_model, num_heads=8):
